@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -51,8 +52,14 @@ func TestOpenStoreSpecialCharsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A plain-path DSN truncates at '?', so build the db under a clean name
-	// and move it into the special-character directory afterwards.
+	// and move it into the special-character directory afterwards. '?' is
+	// illegal in a Windows file name, so there the target keeps only '#':
+	// the '#' escaping is still exercised end to end, and TestSQLiteURI
+	// covers '?' on every OS.
 	dir := filepath.Join(base, "store#x?y")
+	if runtime.GOOS == "windows" {
+		dir = filepath.Join(base, "store#x")
+	}
 	if err := os.Rename(clean, dir); err != nil {
 		t.Fatal(err)
 	}

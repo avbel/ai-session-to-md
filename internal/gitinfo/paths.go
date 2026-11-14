@@ -25,6 +25,10 @@ func Relativize(files []string, root string) []string {
 }
 
 func relativize(files []string, root, home string) []string {
+	// Recorded roots and homes may carry git's forward-slash form; the
+	// file paths themselves are cleaned per path in relative().
+	root = filepath.FromSlash(root)
+	home = filepath.FromSlash(home)
 	seen := make(map[string]struct{}, len(files))
 	out := make([]string, 0, len(files))
 	for _, f := range files {
@@ -55,7 +59,9 @@ func (b base) rel(p string) (string, bool) {
 		return "", false
 	}
 	if b.home {
-		return "~/" + r, true
+		// filepath.Join keeps the whole label on one separator convention:
+		// "~/" on Unix, "~\" on Windows, never the mixed "~/other\c.go".
+		return filepath.Join("~", r), true
 	}
 	return r, true
 }

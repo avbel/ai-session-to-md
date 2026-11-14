@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,20 @@ import (
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
+
+// normalizeForGolden makes rendered text comparable with the POSIX-style
+// goldens on every OS: CRLF collapses to LF, the machine's home dir folds
+// to ~ and remaining "\" separators read as "/". The replacement runs on
+// both sides, so any JSON \uXXXX escape in the meta line is mangled
+// symmetrically and the comparison still holds; -update itself writes the
+// raw output so the committed golden keeps round-tripping ParseMeta.
+func normalizeForGolden(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	if home, err := os.UserHomeDir(); err == nil && len(home) > 1 {
+		s = strings.ReplaceAll(s, home, "~")
+	}
+	return strings.ReplaceAll(s, `\`, "/")
+}
 
 func compareGolden(t *testing.T, name, got string) {
 	t.Helper()
@@ -29,8 +44,8 @@ func compareGolden(t *testing.T, name, got string) {
 	if err != nil {
 		t.Fatalf("read golden %s: %v (run go test -update ./internal/handoff/)", path, err)
 	}
-	if string(want) != got {
-		t.Errorf("golden %s mismatch\ngot:\n%s\nwant:\n%s", name, got, want)
+	if normalized := normalizeForGolden(string(want)); normalized != normalizeForGolden(got) {
+		t.Errorf("golden %s mismatch\ngot:\n%s\nwant:\n%s", name, got, normalized)
 	}
 }
 
@@ -177,7 +192,8 @@ func TestWriteFileAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	// Windows Chmod cannot restrict the mode: the file comes out -rw-rw-rw-.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Errorf("mode must be 0644, got %v", info.Mode().Perm())
 	}
 	entries, err := os.ReadDir(dir)

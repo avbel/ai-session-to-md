@@ -3,6 +3,7 @@ package redact
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -104,6 +105,17 @@ func (r *Redactor) Apply(text string) Result {
 	if len(r.home) > 1 {
 		var n int
 		text, n = replaceHome(text, r.home)
+		// Session text mixes separator conventions on Windows: the OS
+		// spells paths with \ while git and Unix-style tools emit /. Try
+		// the other-separator spelling of the home dir too.
+		if filepath.Separator == '\\' {
+			alt := strings.ReplaceAll(r.home, `\`, "/")
+			if alt != r.home {
+				var m int
+				text, m = replaceHome(text, alt)
+				n += m
+			}
+		}
 		if n > 0 {
 			counts[homeKind] = n
 		}
@@ -116,8 +128,11 @@ func (r *Redactor) Apply(text string) Result {
 const homeKind = "home"
 
 // replaceHome replaces occurrences of home with ~ only at path boundaries:
-// the character after the match is "/", a non-path character, or the end
-// of the text. With home /Users/al, /Users/alice keeps its name.
+// the character after the match is a path separator, a non-path character,
+// or the end of the text. With home /Users/al, /Users/alice keeps its name.
+// When the OS separator is \ (Windows), the character after a fold is
+// normalized to "/", so a fold reads "~/logs" whether the text spelled the
+// path with \ or /.
 func replaceHome(text, home string) (string, int) {
 	var b strings.Builder
 	b.Grow(len(text))
@@ -134,6 +149,10 @@ func replaceHome(text, home string) (string, int) {
 		} else {
 			b.WriteByte('~')
 			n++
+			if end < len(text) && isPathSep(text[end]) && filepath.Separator == '\\' {
+				b.WriteByte('/')
+				end++
+			}
 		}
 		text = text[end:]
 	}
@@ -141,10 +160,16 @@ func replaceHome(text, home string) (string, int) {
 	return b.String(), n
 }
 
+// isPathSep reports whether c is a path separator in either convention:
+// Unix-style tools running on Windows emit "/" where the OS uses "\".
+func isPathSep(c byte) bool {
+	return c == '/' || c == '\\'
+}
+
 // isPathChar reports whether c continues a path name right after the home
 // prefix, so replacing before it would corrupt a longer name ("/Users/al"
-// in "/Users/alice" or "/Users/al.txt"). "/" is NOT a path char: it starts
-// the path under home ("~/x").
+// in "/Users/alice" or "/Users/al.txt"). Separators ("/" and "\") are NOT
+// path chars: they start the path under home ("~/x").
 func isPathChar(c byte) bool {
 	switch {
 	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':

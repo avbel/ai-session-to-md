@@ -74,16 +74,19 @@ func tableNames(ctx context.Context, db *sql.DB) (map[string]bool, error) {
 // filepath.IsAbs on non-Windows hosts.
 var winDrive = regexp.MustCompile(`^[A-Za-z]:/`)
 
-// sqliteURI builds the file: URI consumed by the SQLite driver. Windows drive
-// paths become file:///C:/… with forward slashes and an extra leading slash;
-// unix absolute paths become file:///… . The form follows the path shape, not
-// runtime.GOOS, so it behaves identically everywhere and is testable on any
-// platform.
+// sqliteURI builds the file: URI consumed by the SQLite driver. Absolute
+// paths always become file:///… (a Windows drive as file:///C:/…) with
+// forward slashes, on every OS; relative paths become file:relative/… . The
+// form follows the path shape, not runtime.GOOS, so it behaves identically
+// everywhere and is testable on any platform.
 func sqliteURI(path string) string {
 	// ToSlash alone is not enough: on unix a backslash is an ordinary
 	// filename byte, so Windows drive paths must be converted explicitly.
 	slash := strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
-	if !filepath.IsAbs(path) && !winDrive.MatchString(slash) {
+	// "/"-prefixed paths are absolute on unix but not on Windows, so the
+	// shape check decides, not filepath.IsAbs alone.
+	abs := filepath.IsAbs(path) || winDrive.MatchString(slash) || strings.HasPrefix(slash, "/")
+	if !abs {
 		return "file:" + escapeSegments(slash)
 	}
 	if !strings.HasPrefix(slash, "/") {

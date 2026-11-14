@@ -145,9 +145,12 @@ func (a *Adapter) statCandidate(path string) string {
 // reRooted rebuilds a stored rollout path under the current codex dir by
 // locating the sessions/ or archived_sessions/ marker segment.
 func reRooted(stored, dir string) string {
+	// Codex on Windows can record backslash separators; normalize first so
+	// the marker search and the returned suffix are separator-agnostic.
+	stored = filepath.ToSlash(stored)
 	for _, marker := range []string{"archived_sessions/", "sessions/"} {
 		if i := strings.Index(stored, marker); i >= 0 {
-			return filepath.Join(dir, stored[i:])
+			return filepath.Join(dir, filepath.FromSlash(stored[i:]))
 		}
 	}
 	return ""

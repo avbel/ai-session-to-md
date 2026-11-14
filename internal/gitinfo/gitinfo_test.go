@@ -101,8 +101,8 @@ func TestInfoLiveClean(t *testing.T) {
 	if res.Source != SourceLive {
 		t.Errorf("source = %q, want %q", res.Source, SourceLive)
 	}
-	if res.Root != realRoot(t, dir) {
-		t.Errorf("root = %q, want %q", res.Root, realRoot(t, dir))
+	if res.Root != filepath.Clean(realRoot(t, dir)) {
+		t.Errorf("root = %q, want %q", res.Root, filepath.Clean(realRoot(t, dir)))
 	}
 	if res.Branch != "main" {
 		t.Errorf("branch = %q, want main", res.Branch)
@@ -366,8 +366,8 @@ func TestInfoEmptyRepo(t *testing.T) {
 	if res.Source != SourceLive {
 		t.Errorf("source = %q, want %q", res.Source, SourceLive)
 	}
-	if res.Root != realRoot(t, dir) {
-		t.Errorf("root = %q, want %q", res.Root, realRoot(t, dir))
+	if res.Root != filepath.Clean(realRoot(t, dir)) {
+		t.Errorf("root = %q, want %q", res.Root, filepath.Clean(realRoot(t, dir)))
 	}
 	if res.Branch != "" || res.Head != "" || res.HeadSubject != "" {
 		t.Errorf("branch/head/subject = %q/%q/%q, want empty", res.Branch, res.Head, res.HeadSubject)

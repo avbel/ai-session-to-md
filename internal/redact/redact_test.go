@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,14 @@ func newTestRedactor(t *testing.T, patterns ...string) *Redactor {
 		t.Fatalf("New: %v", err)
 	}
 	return r
+}
+
+// setHome points the home-dir lookup at dir on every OS: os.UserHomeDir
+// reads USERPROFILE on Windows and HOME elsewhere, so both are set.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 }
 
 func TestBuiltinPatterns(t *testing.T) {
@@ -307,7 +316,7 @@ func TestInvalidUserPattern(t *testing.T) {
 
 func TestHomeDirReplaced(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	r := newTestRedactor(t)
 	got := r.Apply(home + "/projects/x and " + home + "/logs")
 	if want := "~/projects/x and ~/logs"; got.Text != want {
@@ -318,8 +327,24 @@ func TestHomeDirReplaced(t *testing.T) {
 	}
 }
 
+// TestHomeDirNativeSeparators folds paths spelled with the OS's own
+// separator (filepath.Join) and, on Windows, with the other convention too:
+// Unix-style tools emit "C:/Users/…" while the OS home is "C:\Users\…".
+func TestHomeDirNativeSeparators(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	r := newTestRedactor(t)
+	got := r.Apply(filepath.Join(home, "logs") + " then " + filepath.ToSlash(home) + "/logs")
+	if want := "~/logs then ~/logs"; got.Text != want {
+		t.Errorf("got %q, want %q", got.Text, want)
+	}
+	if got.Counts["home"] != 2 {
+		t.Errorf("counts[home] = %d, want 2", got.Counts["home"])
+	}
+}
+
 func TestHomeDirPathBoundary(t *testing.T) {
-	t.Setenv("HOME", "/Users/al")
+	setHome(t, "/Users/al")
 	r := newTestRedactor(t)
 	got := r.Apply("/Users/alice visits /Users/al/x, /Users/al end and /Users/al.txt")
 	want := "/Users/alice visits ~/x, ~ end and /Users/al.txt"
@@ -328,8 +353,27 @@ func TestHomeDirPathBoundary(t *testing.T) {
 	}
 }
 
+// TestHomeDirPathBoundaryTempDir is the boundary test built from this
+// machine's home instead of a literal: a same-prefix longer sibling keeps
+// its name, everything directly under home folds, and counts match.
+func TestHomeDirPathBoundaryTempDir(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	r := newTestRedactor(t)
+	sibling := home + "x" // same prefix, longer name
+	in := sibling + "/v and " + filepath.Join(home, "x") + ", " + home + " end and " + home + ".txt"
+	got := r.Apply(in)
+	want := sibling + "/v and ~/x, ~ end and " + home + ".txt"
+	if got.Text != want {
+		t.Errorf("got %q, want %q", got.Text, want)
+	}
+	if got.Counts["home"] != 2 {
+		t.Errorf("counts[home] = %d, want 2", got.Counts["home"])
+	}
+}
+
 func TestTotalExcludesHome(t *testing.T) {
-	t.Setenv("HOME", "/Users/al")
+	setHome(t, "/Users/al")
 	r := newTestRedactor(t)
 	got := r.Apply("/Users/al/a and /Users/al/b")
 	if got.Counts["home"] != 2 {
@@ -343,7 +387,7 @@ func TestTotalExcludesHome(t *testing.T) {
 func TestHomeRootSkipped(t *testing.T) {
 	// HOME=/ must not be applied: every "/" would fold to "~" and no URL
 	// rule could ever match again (the Slack webhook would leak).
-	t.Setenv("HOME", "/")
+	setHome(t, "/")
 	r := newTestRedactor(t)
 	in := "webhook https://hooks." + "slack.com/services/" + "T00/B00/x1y2z3"
 	got := r.Apply(in)

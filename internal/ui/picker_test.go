@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,10 +96,10 @@ func TestMiddleTruncatePathKeepsLastSegment(t *testing.T) {
 }
 
 func TestRelHome(t *testing.T) {
-	home := "/home/u"
+	home := t.TempDir()
 	tests := []struct{ in, want string }{
-		{"/home/u/proj", "~/proj"},
-		{"/home/u", "~"},
+		{filepath.Join(home, "proj"), "~/proj"},
+		{home, "~"},
 		{"/other/path", "/other/path"},
 		{"", "-"},
 	}
@@ -107,21 +108,26 @@ func TestRelHome(t *testing.T) {
 			t.Errorf("RelHome(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
+	// A same-prefix longer name must not fold: home "u" in "users" stays.
+	if got := RelHome(home+"x/v", home); got != home+"x/v" {
+		t.Errorf("RelHome(%q) = %q, want unchanged", home+"x/v", got)
+	}
 }
 
 func TestFormatRow(t *testing.T) {
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	home := t.TempDir()
 	m := session.Meta{
 		Harness:   session.HarnessCodex,
 		ID:        "abc123def456",
 		Title:     "Fix the reducer budget overflow",
-		Cwd:       "/home/u/proj/sub",
+		Cwd:       filepath.Join(home, "proj", "sub"),
 		Branch:    "main",
 		UpdatedAt: now.Add(-3 * time.Hour),
 	}
 	other := m
-	other.Cwd = "/home/u/other"
-	layout := newPickLayout([]session.Meta{m, other}, "/home/u", "/home/u", 80)
+	other.Cwd = filepath.Join(home, "other")
+	layout := newPickLayout([]session.Meta{m, other}, home, home, 80)
 	row := layout.row(m, now)
 	for _, want := range []string{"3h", "codex", "proj/sub", "main", "Fix the reducer budget overflow"} {
 		if !strings.Contains(row, want) {

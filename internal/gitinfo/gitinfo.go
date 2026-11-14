@@ -77,7 +77,14 @@ func Info(ctx context.Context, cwd string, rec session.GitRecord) (Result, error
 	if err != nil {
 		return recorded(rec), nil
 	}
-	return live(ctx, strings.TrimSpace(root), rec), nil
+	return live(ctx, normalizeRoot(strings.TrimSpace(root)), rec), nil
+}
+
+// normalizeRoot brings git's toplevel output into the platform's native
+// form: git prints forward slashes even on Windows ("C:/Users/…"), and
+// downstream filepath joins and comparisons expect native separators.
+func normalizeRoot(root string) string {
+	return filepath.Clean(filepath.FromSlash(root))
 }
 
 // usableDir returns cwd as an absolute, existing directory that can be passed

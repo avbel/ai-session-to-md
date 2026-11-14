@@ -108,9 +108,12 @@ func TestResolveRolloutPrefersRerooted(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A stored path with the sessions marker that also exists on disk.
+	// Codex records rollout paths with "/" separators (its database writes
+	// forward slashes even on Windows), so the marker search inside
+	// reRooted finds it on every OS; os accepts "/" paths on Windows too.
 	other := t.TempDir()
-	stored := filepath.Join(other, "sessions", "2026", "01", "02",
-		"rollout-2026-01-02T10-00-00-"+id+".jsonl")
+	stored := filepath.ToSlash(filepath.Join(other, "sessions", "2026", "01", "02",
+		"rollout-2026-01-02T10-00-00-"+id+".jsonl"))
 	if err := os.MkdirAll(filepath.Dir(stored), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -119,8 +122,8 @@ func TestResolveRolloutPrefersRerooted(t *testing.T) {
 	}
 
 	a := New(dir)
-	if got := a.resolveRollout(stored, id); got != rerooted {
-		t.Fatalf("resolveRollout = %q, want the re-rooted %q", got, rerooted)
+	if got, want := a.resolveRollout(stored, id), filepath.Clean(rerooted); got != want {
+		t.Fatalf("resolveRollout = %q, want the re-rooted %q", got, want)
 	}
 }
 

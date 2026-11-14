@@ -139,7 +139,14 @@ func projectCell(cwd, root, home string) string {
 	if cwd == "" {
 		return "-"
 	}
-	return middleTruncatePath(relScope(cwd, root, home), projCol)
+	return middleTruncatePath(displayPath(relScope(cwd, root, home)), projCol)
+}
+
+// displayPath renders a path label with "/" separators on every OS. Labels
+// feed the picker's filter, and "/" keeps filtering and truncation
+// consistent across machines.
+func displayPath(p string) string {
+	return strings.ReplaceAll(p, `\`, "/")
 }
 
 // relScope expresses cwd relative to root when it sits under it, else
@@ -197,7 +204,9 @@ func FormatAge(t, now time.Time) string {
 	}
 }
 
-// RelHome shortens an absolute path under home to "~/…".
+// RelHome shortens an absolute path under home to "~/…". The label is
+// OS-independent: "/" separates the segments on every platform, so the
+// picker's filter and middle truncation see the same characters everywhere.
 func RelHome(p, home string) string {
 	if p == "" {
 		return "-"
@@ -208,10 +217,17 @@ func RelHome(p, home string) string {
 	if p == home {
 		return "~"
 	}
-	if strings.HasPrefix(p, home+string(filepath.Separator)) {
-		return "~" + strings.TrimPrefix(p, home)
+	if !strings.HasPrefix(p, home) {
+		return p
 	}
-	return p
+	rest := p[len(home):]
+	if rest == "" || (rest[0] != '/' && rest[0] != '\\') {
+		return p
+	}
+	if rest == "/" || rest == `\` {
+		return "~"
+	}
+	return "~/" + rest[1:]
 }
 
 // FormatMatches renders ambiguous-match table rows in the picker's column

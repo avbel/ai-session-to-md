@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,16 @@ import (
 
 func envOf(m map[string]string) Env {
 	return func(k string) string { return m[k] }
+}
+
+// setHomeEnv points the home-dir lookup at dir on every OS: os.UserHomeDir
+// reads USERPROFILE on Windows and HOME elsewhere, so both are set.
+func setHomeEnv(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", dir)
+	}
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -203,7 +214,7 @@ func TestDirsFromFileAndFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !strings.HasPrefix(c.Dirs.Claude, "/") || strings.Contains(c.Dirs.Claude, "~") {
+	if !filepath.IsAbs(c.Dirs.Claude) || strings.Contains(c.Dirs.Claude, "~") {
 		t.Errorf("dirs.claude not expanded: %q", c.Dirs.Claude)
 	}
 	if c.Dirs.Codex != "/codex" || c.Dirs.OpenCode != "/oc" {
@@ -212,12 +223,19 @@ func TestDirsFromFileAndFlags(t *testing.T) {
 }
 
 func TestExpandTilde(t *testing.T) {
-	t.Setenv("HOME", "/home/u")
+	setHomeEnv(t, "/home/u")
 	if got := expandHome("~"); got != "/home/u" {
 		t.Errorf("expandHome(~) = %q", got)
 	}
 	if got := expandHome("~/sub"); got != filepath.Join("/home/u", "sub") {
 		t.Errorf("expandHome(~/sub) = %q", got)
+	}
+	// On Windows the backslash spelling after ~ expands too; on Unix a
+	// backslash is an ordinary filename byte and stays as-is.
+	if runtime.GOOS == "windows" {
+		if got := expandHome(`~\sub`); got != filepath.Join("/home/u", "sub") {
+			t.Errorf("expandHome(~\\sub) = %q, want %q", got, filepath.Join("/home/u", "sub"))
+		}
 	}
 	if got := expandHome("/abs"); got != "/abs" {
 		t.Errorf("expandHome(/abs) = %q", got)

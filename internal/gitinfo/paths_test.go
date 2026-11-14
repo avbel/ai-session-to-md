@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -44,8 +45,8 @@ func TestRelativizeUnderRootAndHome(t *testing.T) {
 		"b.go",
 		filepath.Join("relative", "d.go"),
 		filepath.Join("src", "a.go"),
-		"~/notes.md",
-		"~/other/c.go",
+		filepath.Join("~", "notes.md"),
+		filepath.Join("~", "other", "c.go"),
 	}
 	if !slices.Equal(rest, wantRest) {
 		t.Errorf("relativize = %v, want %v", rest, wantRest)
@@ -99,8 +100,21 @@ func TestRelativizeExported(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 
 	got := Relativize([]string{filepath.Join(home, "f.go")}, "")
-	if len(got) != 1 || got[0] != "~/f.go" {
-		t.Errorf("Relativize = %v, want [~/f.go]", got)
+	if len(got) != 1 || got[0] != filepath.Join("~", "f.go") {
+		t.Errorf("Relativize = %v, want [%s]", got, filepath.Join("~", "f.go"))
+	}
+}
+
+// TestRelativizeHomeSlashLiteral pins the POSIX spelling of the home fold:
+// "~/" plus forward-slash segments. On Windows the fold is native ("~\…"),
+// so this literal-output test only runs on Unix.
+func TestRelativizeHomeSlashLiteral(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the home fold uses the native separator on Windows")
+	}
+	got := relativize([]string{"/home/u/other/c.go"}, "", "/home/u")
+	if len(got) != 1 || got[0] != "~/other/c.go" {
+		t.Errorf("relativize = %v, want [~/other/c.go]", got)
 	}
 }
 
