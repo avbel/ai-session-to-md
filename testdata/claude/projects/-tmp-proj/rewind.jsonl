@@ -1,0 +1,6 @@
+{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-11-13T11:00:00Z","cwd":"/tmp/proj","gitBranch":"main","version":"1.2.3","message":{"role":"user","content":"first attempt"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","model":"m1","content":[{"type":"text","text":"wrong answer"}]}}
+{"type":"user","uuid":"u2","parentUuid":"u1","message":{"role":"user","content":"redo it properly"}}
+{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","model":"m1","content":[{"type":"text","text":"better answer"}]}}
+{"type":"user","uuid":"u3","parentUuid":"a2","message":{"role":"user","content":"thanks"}}
+{"type":"assistant","uuid":"a3","parentUuid":"u3","message":{"role":"assistant","model":"m1","content":[{"type":"text","text":"sure"}]}}

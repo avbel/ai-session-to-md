@@ -1,0 +1,6 @@
+{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-11-13T12:00:00Z","cwd":"/tmp/proj","gitBranch":"main","version":"1.2.3","message":{"role":"user","content":"start the work"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","model":"m1","content":[{"type":"text","text":"working on it"}]}}
+{"type":"system","subtype":"compact_boundary","uuid":"cb1","parentUuid":null,"logicalParentUuid":"a1","compactMetadata":{"trigger":"manual","preTokens":5000}}
+{"type":"user","uuid":"cs1","parentUuid":"cb1","isCompactSummary":true,"message":{"role":"user","content":"Summary: earlier exploration condensed into notes"}}
+{"type":"assistant","uuid":"a2","parentUuid":"cs1","message":{"role":"assistant","model":"m1","content":[{"type":"text","text":"continuing from the summary"}]}}
+{"type":"user","uuid":"u2","parentUuid":"a2","message":{"role":"user","content":"go on"}}

@@ -1,0 +1,23 @@
+{"payload":{"cli_version":"0.42.0","cwd":"/tmp/proj","git":{"branch":"main","commit_hash":"abc123def","repository_url":"https://github.com/example/one.git"},"id":"metaid","session_id":"sid","source":"exec","thread_source":"user"},"timestamp":"2026-01-02T10:00:00Z","type":"session_meta"}
+{"payload":{"cwd":"/tmp/proj","model":"gpt-5.2"},"timestamp":"2026-01-02T10:00:00Z","type":"turn_context"}
+{"payload":{"content":[{"text":"# AGENTS.md instructions\nobey","type":"input_text"},{"text":"\u003cenvironment_context\u003e\ncwd=/tmp/proj","type":"input_text"},{"text":"\u003cguardian_tool_descriptions\u003e\nhidden","type":"input_text"},{"text":"Please fix the bug","type":"input_text"}],"role":"user","type":"message"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"content":[{"type":"input_image"}],"role":"user","type":"message"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"content":[{"text":"I will fix it now.","type":"output_text"}],"role":"assistant","type":"message"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"content":[{"text":"review please"}],"recipient":"reviewer","type":"agent_message"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"summary":[{"text":"thinking hard"},{"text":"more"}],"type":"reasoning"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"arguments":"{\"plan\":[{\"step\":\"write tests\",\"status\":\"in_progress\"},{\"step\":\"ship\",\"status\":\"pending\"}]}","call_id":"callPlan","name":"update_plan","type":"function_call"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"arguments":"{\"input\":\"*** Begin Patch\\n*** Update File: internal/a.go\\n*** Add File: internal/new.go\\n*** Delete File: internal/old.go\\n\",\"summary\":\"patch\"}","call_id":"callA","name":"apply_patch","type":"function_call"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"call_id":"callA","output":"patch applied","type":"function_call_output"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"call_id":"callB","input":"ls -la","name":"shell","type":"custom_tool_call"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"call_id":"callB","output":[{"text":"file1","type":"input_text"},{"text":"file2","type":"input_text"}],"type":"custom_tool_call_output"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"arguments":"{\"cmd\":\"go test\"}","call_id":"callC","name":"run","type":"function_call"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"call_id":"callC","output":{"content":"all passed"},"type":"function_call_output"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"arguments":"{\"q\":1}","call_id":null,"name":"probe","type":"function_call"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"call_id":null,"output":{"output":"probe result"},"type":"function_call_output"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"message":"earlier context summarized"},"timestamp":"2026-01-02T10:00:00Z","type":"compacted"}
+{"payload":{"type":"task_started"},"timestamp":"2026-01-02T10:00:00Z","type":"event_msg"}
+{"payload":{"content":[{"text":"continue please","type":"input_text"}],"role":"user","type":"message"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"content":[{"text":"Done. All tests pass.","type":"output_text"}],"role":"assistant","type":"message"},"timestamp":"2026-01-02T10:00:00Z","type":"response_item"}
+{"payload":{"type":"task_complete"},"timestamp":"2026-01-02T10:00:00Z","type":"event_msg"}
+{not json
+{"payload":{"full":true},"timestamp":"2026-01-02T10:00:00Z","type":"world_state"}

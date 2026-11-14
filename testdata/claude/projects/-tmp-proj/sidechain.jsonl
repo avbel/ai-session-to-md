@@ -1,0 +1,7 @@
+{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-11-13T13:00:00Z","cwd":"/tmp/proj","gitBranch":"main","version":"1.2.3","message":{"role":"user","content":"explore the module"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","model":"m1","content":[{"type":"tool_use","id":"tu_1","name":"Task","input":{"prompt":"explore x"}}]}}
+{"type":"user","uuid":"s1","parentUuid":"a1","isSidechain":true,"message":{"role":"user","content":"subagent prompt"}}
+{"type":"assistant","uuid":"s2","parentUuid":"s1","isSidechain":true,"message":{"role":"assistant","model":"m1","content":[{"type":"tool_use","id":"tu_s","name":"Edit","input":{"file_path":"/tmp/proj/hidden.go"}}]}}
+{"type":"user","uuid":"s3","parentUuid":"s2","isSidechain":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_s","content":"edited the hidden file"}]}}
+{"type":"user","uuid":"u2","parentUuid":"a1","message":{"role":"user","content":"now the main thread"}}
+{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","model":"m1","content":[{"type":"text","text":"main answer"}]}}

@@ -1,0 +1,49 @@
+{
+  "info": {
+    "id": "ses_01export",
+    "title": "Exported session",
+    "directory": "/proj/handoff",
+    "model": "{\"id\":\"gpt-5.2\",\"providerID\":\"openai\"}",
+    "version": "0.4.12",
+    "time_updated": 1763068800000,
+    "time_archived": null
+  },
+  "messages": [
+    {
+      "type": "user",
+      "text": "summarize the repo",
+      "files": ["PLAN.md"]
+    },
+    {
+      "type": "assistant",
+      "model": "openai/gpt-5.2",
+      "finish": null,
+      "content": [
+        { "type": "text", "text": "Reading the plan first." },
+        { "type": "reasoning", "text": "check step 5" },
+        {
+          "type": "tool",
+          "id": "part_1",
+          "name": "read",
+          "state": {
+            "status": "completed",
+            "input": { "path": "PLAN.md" },
+            "content": [{ "type": "text", "text": "plan contents" }]
+          }
+        }
+      ]
+    },
+    {
+      "type": "compaction",
+      "summary": "Earlier: scaffolding done."
+    },
+    {
+      "type": "synthetic",
+      "text": "injected reminder with fake secret sk-aaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "type": "user",
+      "text": "now write the adapter"
+    }
+  ]
+}
