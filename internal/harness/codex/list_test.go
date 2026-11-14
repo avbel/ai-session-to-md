@@ -3,10 +3,8 @@ package codex
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/avbel/ai-session-to-md/internal/harness"
@@ -77,14 +75,8 @@ func TestListDropsUnloadableAndLogs(t *testing.T) {
 // a rollout_path pointing at a FIFO (or any non-regular file) must be
 // refused, or the reader would hang or OOM on it.
 func TestStatCandidateRejectsNonRegular(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("mkfifo is unavailable on windows")
-	}
 	dir := t.TempDir()
-	fifo := filepath.Join(dir, "rollout-evil.jsonl")
-	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
-		t.Skipf("mkfifo not available: %v", err)
-	}
+	fifo := makeFifo(t, dir, "rollout-evil.jsonl")
 	a := New(dir)
 	if got := a.statCandidate(fifo); got != "" {
 		t.Fatalf("FIFO must be refused, got %q", got)
