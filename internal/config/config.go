@@ -4,6 +4,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,53 +104,37 @@ func Load(opts LoadOptions) (*Config, error) {
 		return nil, err
 	}
 
-	c := Config{}
-	if c.BaseURL, err = pickString("base-url", opts, file["base_url"]); err != nil {
-		return nil, err
+	c := Config{
+		BaseURL:          cmp.Or(pickString("base-url", opts, file.BaseURL), "https://api.openai.com/v1"),
+		Model:            pickString("model", opts, file.Model),
+		Thinking:         pickString("thinking", opts, file.Thinking),
+		ThinkingStyle:    pickString("thinking-style", opts, file.ThinkingStyle),
+		APIKeyEnv:        pickString("api-key-env", opts, file.APIKeyEnv),
+		PromptAppend:     pickString("prompt-append", opts, file.PromptAppend),
+		PromptFile:       pickString("prompt-file", opts, file.PromptFile),
+		SystemPromptFile: pickString("system-prompt-file", opts, file.SystemPromptFile),
 	}
-	if c.BaseURL == "" {
-		c.BaseURL = "https://api.openai.com/v1"
-	}
-	for _, s := range []struct {
-		dst  *string
-		name string
-		key  string
-	}{
-		{&c.Model, "model", "model"},
-		{&c.Thinking, "thinking", "thinking"},
-		{&c.ThinkingStyle, "thinking-style", "thinking_style"},
-		{&c.APIKeyEnv, "api-key-env", "api_key_env"},
-		{&c.PromptAppend, "prompt-append", "prompt_append"},
-		{&c.PromptFile, "prompt-file", "prompt_file"},
-		{&c.SystemPromptFile, "system-prompt-file", "system_prompt_file"},
-	} {
-		if *s.dst, err = pickString(s.name, opts, file[s.key]); err != nil {
+	if raw := pickString("extra-body", opts, ""); raw != "" {
+		c.ExtraBody = raw
+	} else {
+		c.ExtraBody, err = extraBodyJSON(file.ExtraBody)
+		if err != nil {
 			return nil, err
 		}
 	}
-	raw := ""
-	if raw, err = pickString("extra-body", opts, nil); err != nil {
+	if c.MaxInputTokens, err = pickInt("max-input-tokens", opts, file.MaxInputTokens, 100000); err != nil {
 		return nil, err
 	}
-	if raw == "" {
-		if raw, err = extraBodyJSON(file["extra_body"]); err != nil {
-			return nil, err
-		}
-	}
-	c.ExtraBody = raw
-	if c.MaxInputTokens, err = pickInt("max-input-tokens", opts, file["max_input_tokens"], 100000); err != nil {
+	if c.MaxOutputTokens, err = pickInt("max-output-tokens", opts, file.MaxOutputTokens, 0); err != nil {
 		return nil, err
 	}
-	if c.MaxOutputTokens, err = pickInt("max-output-tokens", opts, file["max_output_tokens"], 0); err != nil {
+	if c.Timeout, err = pickDuration("timeout", opts, file.Timeout, 10*time.Minute); err != nil {
 		return nil, err
 	}
-	if c.Timeout, err = pickDuration("timeout", opts, file["timeout"], 10*time.Minute); err != nil {
+	if c.RedactPatterns, err = redactPatterns(file.RedactPatterns); err != nil {
 		return nil, err
 	}
-	if c.RedactPatterns, err = redactPatterns(file["redact_patterns"]); err != nil {
-		return nil, err
-	}
-	if c.Dirs, err = pickDirs(opts, file["dirs"]); err != nil {
+	if c.Dirs, err = pickDirs(opts, file.Dirs); err != nil {
 		return nil, err
 	}
 
@@ -162,23 +147,16 @@ func Load(opts LoadOptions) (*Config, error) {
 
 // pickString applies the precedence chain to one string setting: flag, then
 // env, then file. Empty results mean "unset".
-func pickString(name string, opts LoadOptions, fileVal any) (string, error) {
+func pickString(name string, opts LoadOptions, fileVal string) string {
 	if v, ok := opts.Values[name]; ok {
-		return v, nil
+		return v
 	}
 	if envName := envNames[name]; envName != "" {
 		if v := opts.Env(envName); v != "" {
-			return v, nil
+			return v
 		}
 	}
-	switch v := fileVal.(type) {
-	case nil:
-		return "", nil
-	case string:
-		return v, nil
-	default:
-		return "", fmt.Errorf("%w: %s must be a string", ErrUsage, configKey(name))
-	}
+	return fileVal
 }
 
 // configKey renders a flag name as its config-file key for error messages.
@@ -186,15 +164,24 @@ func configKey(name string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(name, "-", "_"), "_dir", "")
 }
 
-// pickInt resolves an integer setting; the file value may be a TOML integer.
-func pickInt(name string, opts LoadOptions, fileVal any, def int) (int, error) {
-	raw, have, err := pickRaw(name, opts, fileVal, true)
-	if err != nil {
-		return 0, err
+// pickInt resolves an integer setting; the file value is already typed by the
+// TOML decoder.
+func pickInt(name string, opts LoadOptions, fileVal *int64, def int) (int, error) {
+	if v, ok := opts.Values[name]; ok {
+		return parseIntSetting(name, v)
 	}
-	if !have {
-		return def, nil
+	if envName := envNames[name]; envName != "" {
+		if v := opts.Env(envName); v != "" {
+			return parseIntSetting(name, v)
+		}
 	}
+	if fileVal != nil {
+		return int(*fileVal), nil
+	}
+	return def, nil
+}
+
+func parseIntSetting(name, raw string) (int, error) {
 	n, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s must be a number, got %q", ErrUsage, configKey(name), raw)
@@ -203,10 +190,19 @@ func pickInt(name string, opts LoadOptions, fileVal any, def int) (int, error) {
 }
 
 // pickDuration resolves a duration setting (default form: 10m).
-func pickDuration(name string, opts LoadOptions, fileVal any, def time.Duration) (time.Duration, error) {
-	raw, have, err := pickRaw(name, opts, fileVal, false)
-	if err != nil {
-		return 0, err
+func pickDuration(name string, opts LoadOptions, fileVal string, def time.Duration) (time.Duration, error) {
+	raw, have := "", false
+	if v, ok := opts.Values[name]; ok {
+		raw, have = v, true
+	} else {
+		if envName := envNames[name]; envName != "" {
+			if v := opts.Env(envName); v != "" {
+				raw, have = v, true
+			}
+		}
+		if !have && fileVal != "" {
+			raw, have = fileVal, true
+		}
 	}
 	if !have {
 		return def, nil
@@ -218,33 +214,7 @@ func pickDuration(name string, opts LoadOptions, fileVal any, def time.Duration)
 	return d, nil
 }
 
-// pickRaw finds the raw string of a setting: flag, then env, then file. The
-// file value must be a string, or an integer when intOK.
-func pickRaw(name string, opts LoadOptions, fileVal any, intOK bool) (string, bool, error) {
-	if v, ok := opts.Values[name]; ok {
-		return v, true, nil
-	}
-	if envName := envNames[name]; envName != "" {
-		if v := opts.Env(envName); v != "" {
-			return v, true, nil
-		}
-	}
-	switch v := fileVal.(type) {
-	case nil:
-		return "", false, nil
-	case string:
-		return v, v != "", nil
-	case int64:
-		if intOK {
-			return strconv.FormatInt(v, 10), true, nil
-		}
-		return "", false, fmt.Errorf("%w: %s must be a string", ErrUsage, configKey(name))
-	default:
-		return "", false, fmt.Errorf("%w: %s has an unsupported type", ErrUsage, configKey(name))
-	}
-}
-
-func extraBodyJSON(v any) (string, error) {
+func extraBodyJSON(v map[string]any) (string, error) {
 	if v == nil {
 		return "", nil
 	}
@@ -255,20 +225,9 @@ func extraBodyJSON(v any) (string, error) {
 	return string(b), nil
 }
 
-func redactPatterns(v any) ([]string, error) {
-	list, ok := v.([]any)
-	if !ok {
-		if v == nil {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("%w: redact_patterns must be an array of strings", ErrUsage)
-	}
-	out := make([]string, 0, len(list))
-	for _, item := range list {
-		s, ok := item.(string)
-		if !ok {
-			return nil, fmt.Errorf("%w: redact_patterns must be strings", ErrUsage)
-		}
+func redactPatterns(patterns []string) ([]string, error) {
+	out := make([]string, 0, len(patterns))
+	for _, s := range patterns {
 		if _, err := regexp.Compile(s); err != nil {
 			return nil, fmt.Errorf("%w: redact pattern %q: %v", ErrUsage, s, err)
 		}
@@ -277,36 +236,15 @@ func redactPatterns(v any) ([]string, error) {
 	return out, nil
 }
 
-func pickDirs(opts LoadOptions, fileVal any) (Dirs, error) {
-	fileDirs, _ := fileVal.(map[string]any)
-	if fileVal != nil && fileDirs == nil {
-		return Dirs{}, fmt.Errorf("%w: [dirs] must be a table", ErrUsage)
+func pickDirs(opts LoadOptions, fileDirs dirsFile) (Dirs, error) {
+	dir := func(flagName, fileVal string) string {
+		return cmp.Or(pickString(flagName, opts, ""), fileVal)
 	}
-	dir := func(flagName, fileKey string) (string, error) {
-		if v, ok := opts.Values[flagName]; ok {
-			return v, nil
-		}
-		switch v := fileDirs[fileKey].(type) {
-		case nil:
-			return "", nil
-		case string:
-			return v, nil
-		default:
-			return "", fmt.Errorf("%w: dirs.%s must be a string", ErrUsage, fileKey)
-		}
-	}
-	var d Dirs
-	var err error
-	if d.Claude, err = dir("claude-dir", "claude"); err != nil {
-		return d, err
-	}
-	if d.Codex, err = dir("codex-dir", "codex"); err != nil {
-		return d, err
-	}
-	if d.OpenCode, err = dir("opencode-dir", "opencode"); err != nil {
-		return d, err
-	}
-	return d, nil
+	return Dirs{
+		Claude:   dir("claude-dir", fileDirs.Claude),
+		Codex:    dir("codex-dir", fileDirs.Codex),
+		OpenCode: dir("opencode-dir", fileDirs.OpenCode),
+	}, nil
 }
 
 func expandPaths(c *Config) {
@@ -437,20 +375,20 @@ func (c *Config) APIKey(env Env) string {
 
 // readFile parses the config file; a missing file is fine, a broken one is
 // a usage error.
-func readFile(path string) (map[string]any, error) {
+func readFile(path string) (fileConfig, error) {
 	if path == "" {
-		return map[string]any{}, nil
+		return fileConfig{}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return map[string]any{}, nil
+			return fileConfig{}, nil
 		}
-		return nil, fmt.Errorf("%w: read config file %s: %v", ErrUsage, path, err)
+		return fileConfig{}, fmt.Errorf("%w: read config file %s: %v", ErrUsage, path, err)
 	}
 	doc, err := parseTOML(string(data))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrUsage, path, err)
+		return fileConfig{}, fmt.Errorf("%w: %s: %v", ErrUsage, path, err)
 	}
 	return doc, nil
 }

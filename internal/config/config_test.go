@@ -125,10 +125,10 @@ func TestLoadValidation(t *testing.T) {
 		{"bad scheme", "base_url = \"ftp://x\"\n", "scheme"},
 		{"bad thinking", "thinking = \"maximum\"\n", "thinking level"},
 		{"bad style", "thinking_style = \"deep\"\n", "thinking style"},
-		{"bad extra body", "extra_body = 3\n", "JSON object"},
+		{"bad extra body", "extra_body = 3\n", "extra_body must be a table"},
 		{"bad timeout", "timeout = \"soon\"\n", "duration"},
-		{"bad int", "max_input_tokens = \"lots\"\n", "must be a number"},
-		{"toml syntax", "base_url =\n", "missing value"},
+		{"bad int", "max_input_tokens = \"lots\"\n", "incompatible types"},
+		{"toml syntax", "base_url =\n", "expected value"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

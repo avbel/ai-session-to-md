@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseTOMLSchema(t *testing.T) {
 	src := `
@@ -23,77 +26,92 @@ extra_body = { temperature = 0.2, top_p = 0.9, flag = true, note = "x=y" }
 claude = "~/.claude"
 codex = "~/.codex"
 opencode = "~/.local/share/opencode"
+
+unknown_key = "ignored"
+[unknown_table]
+x = 1
 `
 	doc, err := parseTOML(src)
 	if err != nil {
 		t.Fatalf("parseTOML: %v", err)
 	}
-	if doc["base_url"] != "https://openrouter.ai/api/v1" {
-		t.Errorf("base_url = %v", doc["base_url"])
+	if doc.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Errorf("base_url = %v", doc.BaseURL)
 	}
-	if doc["model"] != "some/model" {
-		t.Errorf("model = %v", doc["model"])
+	if doc.Model != "some/model" {
+		t.Errorf("model = %v", doc.Model)
 	}
-	if doc["max_input_tokens"] != int64(100000) {
-		t.Errorf("max_input_tokens = %T %v", doc["max_input_tokens"], doc["max_input_tokens"])
+	if doc.MaxInputTokens == nil || *doc.MaxInputTokens != 100000 {
+		t.Errorf("max_input_tokens = %v", doc.MaxInputTokens)
 	}
-	if doc["max_output_tokens"] != int64(8000) {
-		t.Errorf("max_output_tokens = %v", doc["max_output_tokens"])
+	if doc.MaxOutputTokens == nil || *doc.MaxOutputTokens != 8000 {
+		t.Errorf("max_output_tokens = %v", doc.MaxOutputTokens)
 	}
-	if doc["system_prompt_file"] != "" {
-		t.Errorf("system_prompt_file = %v", doc["system_prompt_file"])
+	if doc.SystemPromptFile != "" {
+		t.Errorf("system_prompt_file = %v", doc.SystemPromptFile)
 	}
-	pats, ok := doc["redact_patterns"].([]any)
-	if !ok || len(pats) != 2 || pats[0] != "(?i)internal-token-[a-z0-9]{20}" {
-		t.Errorf("redact_patterns = %#v", doc["redact_patterns"])
+	if len(doc.RedactPatterns) != 2 || doc.RedactPatterns[0] != "(?i)internal-token-[a-z0-9]{20}" {
+		t.Errorf("redact_patterns = %#v", doc.RedactPatterns)
 	}
-	extra, ok := doc["extra_body"].(map[string]any)
-	if !ok {
-		t.Fatalf("extra_body = %#v", doc["extra_body"])
-	}
+	extra := doc.ExtraBody
 	if extra["temperature"] != float64(0.2) || extra["top_p"] != float64(0.9) ||
 		extra["flag"] != true || extra["note"] != "x=y" {
 		t.Errorf("extra_body = %#v", extra)
 	}
-	dirs, ok := doc["dirs"].(map[string]any)
-	if !ok || dirs["claude"] != "~/.claude" || dirs["opencode"] != "~/.local/share/opencode" {
-		t.Errorf("dirs = %#v", doc["dirs"])
+	if doc.Dirs.Claude != "~/.claude" || doc.Dirs.OpenCode != "~/.local/share/opencode" {
+		t.Errorf("dirs = %#v", doc.Dirs)
 	}
 }
 
 func TestParseTOMLEscapes(t *testing.T) {
-	doc, err := parseTOML(`a = "tab\there\nand \"quoted\" and \\ done"
-b = "unié"
-c = 'no \escapes \d'
+	doc, err := parseTOML(`base_url = "tab\there\nand \"quoted\" and \\ done"
+model = 'no \escapes \d'
 `)
 	if err != nil {
 		t.Fatalf("parseTOML: %v", err)
 	}
-	if doc["a"] != "tab\there\nand \"quoted\" and \\ done" {
-		t.Errorf("a = %q", doc["a"])
+	if doc.BaseURL != "tab\there\nand \"quoted\" and \\ done" {
+		t.Errorf("base_url = %q", doc.BaseURL)
 	}
-	if doc["b"] != "unié" {
-		t.Errorf("b = %q", doc["b"])
-	}
-	if doc["c"] != `no \escapes \d` {
-		t.Errorf("c = %q", doc["c"])
+	if doc.Model != `no \escapes \d` {
+		t.Errorf("model = %q", doc.Model)
 	}
 }
 
 func TestParseTOMLErrors(t *testing.T) {
-	tests := []string{
-		"key\n",
-		"key = \n",
-		"key = \"unterminated\n",
-		"key = [\"a\", \"b\"\n",
-		"key = { a = 1\n",
-		"key = whatisthis\n",
-		"[unclosed\n",
-		"a.b.c = 1\n",
+	tests := []struct{ src, want string }{
+		{"key\n", "expected '.' or '='"},
+		{"key = \n", "expected value"},
+		{"key = \"unterminated\n", "newlines"},
+		{"key = [\"a\", \"b\"\n", "array terminator"},
+		{"key = { a = 1\n", "terminator"},
+		{"key = whatisthis\n", "expected value"},
+		{"[unclosed\n", "table name"},
+		{"timeout = 5\n", "incompatible types"},
+		{"max_input_tokens = \"lots\"\n", "incompatible types"},
+		{"max_input_tokens = [1]\n", "incompatible types"},
+		{"[dirs]\nclaude = 5\n", "incompatible types"},
+		{"extra_body = 3\n", "extra_body must be a table"},
+		{"extra_body = \"x\"\n", "extra_body must be a table"},
 	}
-	for _, src := range tests {
-		if _, err := parseTOML(src); err == nil {
-			t.Errorf("parseTOML(%q) = nil error, want error", src)
+	for _, tt := range tests {
+		_, err := parseTOML(tt.src)
+		if err == nil {
+			t.Errorf("parseTOML(%q) = nil error, want %q", tt.src, tt.want)
+			continue
 		}
+		if !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("parseTOML(%q) = %q, want it to contain %q", tt.src, err, tt.want)
+		}
+	}
+}
+
+func TestParseTOMLAcceptsDottedAndEmptyExtraBody(t *testing.T) {
+	doc, err := parseTOML("a.b.c = 1\nextra_body = {}\n")
+	if err != nil {
+		t.Fatalf("parseTOML: %v", err)
+	}
+	if doc.ExtraBody == nil {
+		t.Error("empty extra_body table must decode to a non-nil map")
 	}
 }

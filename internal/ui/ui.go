@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
+	"os/user"
+
+	"charm.land/lipgloss/v2"
+	"golang.org/x/term"
 )
 
-// ErrCancelled reports that the user cancelled a prompt (Esc, q, Ctrl-C or
+// ErrCancelled reports that the user cancelled a prompt (Esc, Ctrl-C or
 // EOF); the CLI maps it to exit code 130.
 var ErrCancelled = errors.New("cancelled by user")
 
@@ -64,55 +65,58 @@ func New(stderr io.Writer, stdin *os.File, inTTY, errTTY bool, opts Options) *UI
 	return u
 }
 
-// DetectTTY reports whether f is a terminal: a character device that is not
-// /dev/null (whose stat also reports a character device). It is the stdlib
-// stand-in for x/term.IsTerminal, which is not a dependency.
+// DetectTTY reports whether f is a terminal. A nil file (test injection) is
+// never a terminal.
 func DetectTTY(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		return false
-	}
-	if devNull, err := os.Stat(os.DevNull); err == nil && os.SameFile(info, devNull) {
-		return false
-	}
-	return true
+	return f != nil && term.IsTerminal(int(f.Fd()))
 }
 
 const defaultWidth = 100
 
-// terminalWidth shells out to stty on the TTY; 0 means unknown.
-func terminalWidth(stdin *os.File) int {
-	if runtime.GOOS == "windows" {
+// terminalWidth asks the terminal driver for the column count; 0 means
+// unknown.
+func terminalWidth(f *os.File) int {
+	if f == nil {
 		return 0
 	}
-	cmd := exec.Command("stty", "size")
-	cmd.Stdin = stdin
-	out, err := cmd.Output()
+	w, _, err := term.GetSize(int(f.Fd()))
 	if err != nil {
 		return 0
 	}
-	fields := strings.Fields(string(out))
-	if len(fields) != 2 {
-		return 0
-	}
-	var cols int
-	if _, err := fmt.Sscanf(fields[1], "%d", &cols); err != nil {
-		return 0
-	}
-	return cols
+	return w
 }
 
-func (u *UI) colorize(code, s string) string {
+var (
+	styleBold   = lipgloss.NewStyle().Bold(true)
+	styleGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	styleYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	styleDim    = lipgloss.NewStyle().Faint(true)
+)
+
+func (u *UI) bold(s string) string   { return u.paint(styleBold, s) }
+func (u *UI) green(s string) string  { return u.paint(styleGreen, s) }
+func (u *UI) yellow(s string) string { return u.paint(styleYellow, s) }
+func (u *UI) dim(s string) string    { return u.paint(styleDim, s) }
+
+// paint renders s with the style only when color is on, so the plain output
+// is byte-identical to the unstyled string.
+func (u *UI) paint(style lipgloss.Style, s string) string {
 	if !u.Color {
 		return s
 	}
-	return "\x1b[" + code + "m" + s + "\x1b[0m"
+	return style.Render(s)
 }
 
-func (u *UI) bold(s string) string   { return u.colorize("1", s) }
-func (u *UI) green(s string) string  { return u.colorize("32", s) }
-func (u *UI) yellow(s string) string { return u.colorize("33", s) }
-func (u *UI) dim(s string) string    { return u.colorize("2", s) }
 func (u *UI) printLine(s string) {
 	_, _ = fmt.Fprintln(u.Stderr, s)
+}
+
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return h
+	}
+	if u, err := user.Current(); err == nil {
+		return u.HomeDir
+	}
+	return ""
 }

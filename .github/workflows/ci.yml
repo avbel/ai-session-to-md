@@ -35,6 +35,9 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: End-to-end test
+        run: go test -tags e2e ./e2e/...
+
       - name: Read .golangci-version
         if: runner.os == 'Linux'
         id: golangci-version

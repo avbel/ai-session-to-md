@@ -1,15 +1,13 @@
 package ui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"charm.land/huh/v2"
 	"github.com/avbel/ai-session-to-md/internal/session"
 )
 
@@ -23,60 +21,38 @@ const (
 	minTitle   = 8
 )
 
-// Pick shows the session list and reads a selection from stdin. Esc/q/EOF
-// and Ctrl-C (via ctx) return ErrCancelled. The caller redacts the metas it
-// wants displayed.
+// pickLabelMargin reserves room for the huh selector cursor and the theme's
+// base padding, so labels never wrap inside the viewport.
+const pickLabelMargin = 4
+
+// maxPickHeight is the tallest option viewport the picker shows (§15).
+const maxPickHeight = 15
+
+// Pick shows the session list in a huh select with filtering on. Esc and
+// Ctrl-C return ErrCancelled (exit 130), an empty list ErrNoSessions
+// (exit 3). The caller redacts the metas it wants displayed.
 func (u *UI) Pick(ctx context.Context, metas []session.Meta, root string, now time.Time) (session.Meta, error) {
 	if len(metas) == 0 {
 		return session.Meta{}, fmt.Errorf("no sessions for %s; try --all: %w", root, ErrNoSessions)
 	}
 	home := homeDir()
-	rows := FormatRows(metas, now, home, u.width)
-	u.printLine(u.bold(fmt.Sprintf("sessions for %s — %d, newest first", root, len(metas))))
-	for i, row := range rows {
-		u.printLine(fmt.Sprintf(" %2d  %s", i+1, u.dim(row)))
+	rows := FormatRows(metas, now, home, u.width-pickLabelMargin)
+	options := make([]huh.Option[session.Meta], len(metas))
+	for i, m := range metas {
+		options[i] = huh.NewOption(rows[i], m)
 	}
-	reader := bufio.NewReader(u.Stdin)
-	for {
-		choice, err := u.readLine(ctx, reader, fmt.Sprintf("select [1-%d], q to cancel: ", len(metas)))
-		if err != nil {
-			return session.Meta{}, err
-		}
-		choice = strings.TrimSpace(choice)
-		switch {
-		case choice == "" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "esc"):
-			return session.Meta{}, ErrCancelled
-		}
-		n := 0
-		if _, err := fmt.Sscanf(choice, "%d", &n); err != nil || n < 1 || n > len(metas) {
-			u.printLine(u.yellow(fmt.Sprintf("pick 1-%d or q", len(metas))))
-			continue
-		}
-		return metas[n-1], nil
+	var picked session.Meta
+	sel := huh.NewSelect[session.Meta]().
+		Title(fmt.Sprintf("sessions for %s — %d, newest first", root, len(metas))).
+		Options(options...).
+		Value(&picked).
+		Filtering(true).
+		Height(min(maxPickHeight, len(metas)) + 1)
+	sel.WithWidth(u.width)
+	if err := u.runForm(ctx, huh.NewGroup(sel)); err != nil {
+		return session.Meta{}, err
 	}
-}
-
-// readLine reads one line from stdin, returning early when ctx is cancelled.
-func (u *UI) readLine(ctx context.Context, reader *bufio.Reader, prompt string) (string, error) {
-	_, _ = fmt.Fprint(u.Stderr, prompt)
-	type result struct {
-		line string
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		line, err := reader.ReadString('\n')
-		ch <- result{line, err}
-	}()
-	select {
-	case <-ctx.Done():
-		return "", fmt.Errorf("pick: %w: %v", ErrCancelled, ctx.Err())
-	case r := <-ch:
-		if r.err != nil && r.line == "" {
-			return "", fmt.Errorf("pick: %w: %v", ErrCancelled, r.err)
-		}
-		return strings.TrimRight(r.line, "\r\n"), nil
-	}
+	return picked, nil
 }
 
 // FormatRows renders the picker option labels:
@@ -183,14 +159,4 @@ func padRight(s string, width int) string {
 		return s + strings.Repeat(" ", width-n)
 	}
 	return s
-}
-
-func homeDir() string {
-	if h, err := os.UserHomeDir(); err == nil {
-		return h
-	}
-	if u, err := user.Current(); err == nil {
-		return u.HomeDir
-	}
-	return ""
 }
