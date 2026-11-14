@@ -1,0 +1,210 @@
+# Release: test, cross-build, checksum, publish on v* tags, then update the
+# Homebrew tap. Per PLAN.md §17.2–17.3 and the size budget in §3.1.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The §17.1 CI steps on ubuntu, inlined: ci.yml has no workflow_call
+    # trigger, so duplicating the steps is the simpler robust option.
+    name: Test (ubuntu)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go mod verify
+        run: |
+          set -euo pipefail
+          go mod verify
+      - name: go vet
+        run: |
+          set -euo pipefail
+          go vet ./...
+      - name: go test
+        run: |
+          set -euo pipefail
+          go test -race ./...
+      - name: Read golangci-lint version
+        id: golangci-version
+        run: |
+          set -euo pipefail
+          echo "version=$(cat .golangci-version)" >> "$GITHUB_OUTPUT"
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ steps.golangci-version.outputs.version }}
+          install-only: true
+      - name: lint (same checks as the pre-commit hook)
+        run: |
+          set -euo pipefail
+          scripts/lint.sh
+      - name: govulncheck
+        run: |
+          set -euo pipefail
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate tag
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::tag '${GITHUB_REF_NAME}' must match ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$"
+            exit 1
+          fi
+      - name: Build and archive all targets
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          targets=(
+            "darwin arm64 macos-arm64"
+            "linux amd64 linux-x64"
+            "linux arm64 linux-arm64"
+            "windows amd64 windows-x64"
+            "windows arm64 windows-arm64"
+          )
+          for target in "${targets[@]}"; do
+            read -r goos goarch name <<<"${target}"
+            ext=""
+            if [[ "${goos}" == "windows" ]]; then
+              ext=".exe"
+            fi
+            mkdir -p "dist/${name}"
+            cp LICENSE README.md "dist/${name}/"
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+              -trimpath -buildvcs=false \
+              -ldflags "-s -w -buildid= -X main.version=${VERSION}" \
+              -o "dist/${name}/ai-session-to-md${ext}" \
+              ./cmd/ai-session-to-md
+            if [[ "${goos}" == "windows" ]]; then
+              (cd "dist/${name}" && zip -9 -q "../../ai-session-to-md-${name}.zip" *)
+            else
+              tar -cf - -C "dist/${name}" . | xz -9e > "dist/ai-session-to-md-${name}.tar.xz"
+            fi
+          done
+      - name: Size guard (linux/amd64) and job summary
+        run: |
+          set -euo pipefail
+          MAX_BIN=14680064 # 14 MiB
+          MAX_TARXZ=4823449 # 4.6 MiB
+          bin_size="$(stat -c%s dist/linux-x64/ai-session-to-md)"
+          tarxz_size="$(stat -c%s dist/ai-session-to-md-linux-x64.tar.xz)"
+          if (( bin_size > MAX_BIN )); then
+            echo "::error::linux/amd64 binary is ${bin_size} bytes; limit is ${MAX_BIN}"
+            exit 1
+          fi
+          if (( tarxz_size > MAX_TARXZ )); then
+            echo "::error::ai-session-to-md-linux-x64.tar.xz is ${tarxz_size} bytes; limit is ${MAX_TARXZ}"
+            exit 1
+          fi
+          {
+            echo "### Release assets"
+            echo
+            echo "| Asset | Size |"
+            echo "|---|---|"
+            echo "| ai-session-to-md-linux-x64 (binary) | $(numfmt --to=iec "${bin_size}") |"
+            for asset in dist/ai-session-to-md-*; do
+              printf '| %s | %s |\n' "${asset#dist/}" "$(du -h "${asset}" | cut -f1)"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: sha256 checksums
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum ai-session-to-md-* > ../checksums-sha256.txt)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build
+          path: |
+            dist/ai-session-to-md-*
+            checksums-sha256.txt
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: .
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          files: |
+            dist/ai-session-to-md-*
+            checksums-sha256.txt
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  update-homebrew:
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: .
+      - name: Render Homebrew formula
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sum_of() {
+            local asset="$1" sum
+            sum="$(grep " ${asset}\$" checksums-sha256.txt | cut -d' ' -f1 || true)"
+            if [[ -z "${sum}" ]]; then
+              echo "::error::no sha256 for ${asset} in checksums-sha256.txt"
+              exit 1
+            fi
+            printf '%s' "${sum}"
+          }
+          sha_macos_arm64="$(sum_of ai-session-to-md-macos-arm64.tar.xz)"
+          sha_linux_x64="$(sum_of ai-session-to-md-linux-x64.tar.xz)"
+          sha_linux_arm64="$(sum_of ai-session-to-md-linux-arm64.tar.xz)"
+          sed -e "s/@VERSION@/${version}/" \
+            -e "s/@SHA_MACOS_ARM64@/${sha_macos_arm64}/" \
+            -e "s/@SHA_LINUX_X64@/${sha_linux_x64}/" \
+            -e "s/@SHA_LINUX_ARM64@/${sha_linux_arm64}/" \
+            packaging/homebrew/ai-session-to-md.rb.tmpl > ai-session-to-md.rb
+          if grep -nE '@[A-Z0-9_]+@' ai-session-to-md.rb; then
+            echo "::error::unreplaced placeholders remain in ai-session-to-md.rb"
+            exit 1
+          fi
+      - name: Push formula to avbel/homebrew-tap
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          gh auth setup-git
+          gh repo clone avbel/homebrew-tap /tmp/homebrew-tap
+          mkdir -p /tmp/homebrew-tap/Formula
+          cp ai-session-to-md.rb /tmp/homebrew-tap/Formula/ai-session-to-md.rb
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/ai-session-to-md.rb
+          git commit -m "Update ai-session-to-md to ${version}"
+          git push
