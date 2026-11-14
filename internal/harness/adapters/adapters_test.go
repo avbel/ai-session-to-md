@@ -23,7 +23,7 @@ func TestDefaultAdaptersSkipsMissingDirs(t *testing.T) {
 		Claude:   claude,
 		Codex:    filepath.Join(base, "missing"),
 		OpenCode: opencode,
-	}, nil)
+	}, nil, nil)
 
 	if len(got) != 2 {
 		t.Fatalf("want 2 adapters, got %d", len(got))
@@ -42,7 +42,7 @@ func TestDefaultAdaptersAllMissing(t *testing.T) {
 		Claude:   filepath.Join(base, "no-claude"),
 		Codex:    filepath.Join(base, "no-codex"),
 		OpenCode: filepath.Join(base, "no-opencode"),
-	}, func(string) {})
+	}, func(string) {}, nil)
 
 	if len(got) != 0 {
 		t.Errorf("missing dirs must be skipped silently, got %d adapters", len(got))
@@ -52,7 +52,7 @@ func TestDefaultAdaptersAllMissing(t *testing.T) {
 func TestDefaultAdaptersWiresWarn(t *testing.T) {
 	base := t.TempDir()
 	var warns []string
-	got := DefaultAdapters(Dirs{Codex: base}, func(w string) { warns = append(warns, w) })
+	got := DefaultAdapters(Dirs{Codex: base}, func(w string) { warns = append(warns, w) }, nil)
 
 	if len(got) != 1 || got[0].Name() != session.HarnessCodex {
 		t.Fatalf("want the codex adapter only, got %d", len(got))

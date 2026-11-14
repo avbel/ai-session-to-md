@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/avbel/ai-session-to-md/internal/session"
@@ -179,5 +178,5 @@ func renderAll(turns []session.Turn, l limits) []string {
 			reasoningAfter++
 		}
 	}
-	return slices.DeleteFunc(blocks, func(b string) bool { return b == "" })
+	return blocks
 }

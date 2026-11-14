@@ -6,7 +6,6 @@
 package adapters
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/avbel/ai-session-to-md/internal/harness"
@@ -20,24 +19,25 @@ type Dirs struct {
 	Claude, Codex, OpenCode string
 }
 
-// DefaultAdapters builds the three adapters for dirs, wiring warn into the
-// adapters' diagnostic hooks. A harness whose directory does not exist is
-// skipped silently, per the CLI rules; a directory that exists but fails to
-// read surfaces later, as a warning from the adapter's List. warn may be
-// nil.
-func DefaultAdapters(dirs Dirs, warn func(string)) []harness.Adapter {
+// DefaultAdapters builds the three adapters for dirs. verbose receives
+// per-item diagnostics (e.g. dropped Codex threads); warn receives genuine
+// warnings the user should see (e.g. an OpenCode snapshot fallback). A
+// harness whose directory does not exist is skipped silently, per the CLI
+// rules; a directory that exists but fails to read surfaces later, as a
+// warning from the adapter's List. Either hook may be nil.
+func DefaultAdapters(dirs Dirs, warn func(string), verbose func(format string, args ...any)) []harness.Adapter {
 	if warn == nil {
 		warn = func(string) {}
+	}
+	if verbose == nil {
+		verbose = func(string, ...any) {}
 	}
 	var out []harness.Adapter
 	if isDir(dirs.Claude) {
 		out = append(out, claudecode.New(dirs.Claude))
 	}
 	if isDir(dirs.Codex) {
-		log := func(format string, args ...any) {
-			warn(fmt.Sprintf(format, args...))
-		}
-		out = append(out, codex.New(dirs.Codex, codex.WithLogger(log)))
+		out = append(out, codex.New(dirs.Codex, codex.WithLogger(verbose)))
 	}
 	if isDir(dirs.OpenCode) {
 		out = append(out, opencode.New(dirs.OpenCode, opencode.WithWarn(warn)))

@@ -100,7 +100,8 @@ func (a *app) run(ctx context.Context, flags *cli.Flags) error {
 		return err
 	}
 
-	ads := buildAdapters(resolveDirs(cfg, a.getenv), flags.Harness, u.Warn)
+	verbosef := func(format string, args ...any) { log(fmt.Sprintf(format, args...)) }
+	ads := buildAdapters(resolveDirs(cfg, a.getenv), flags.Harness, u.Warn, verbosef)
 	root, origin := scopeForCwd(ctx)
 	scope := harness.Scope{All: flags.All, Root: root, OriginURL: origin}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/avbel/ai-session-to-md/internal/session"
@@ -97,7 +98,7 @@ func (r Reducer) fitTail(turns []session.Turn) (limits, error) {
 // budget/2 tokens are summarized sequentially, and the joined notes are
 // re-summarized up to maxNoteRounds times until notes plus the tail fit.
 func (r Reducer) condenseOlder(ctx context.Context, older []session.Turn, budget, tailTokens int) (string, error) {
-	blocks := renderAll(older, olderLimits())
+	blocks := slices.DeleteFunc(renderAll(older, olderLimits()), func(b string) bool { return b == "" })
 	chunkTokens := max(1, budget/2)
 	notes, err := r.summarizeChunks(ctx, chunkBlocks(blocks, chunkTokens))
 	if err != nil {

@@ -25,12 +25,12 @@ import (
 // buildAdapters constructs the concrete adapters for the configured dirs and
 // restricts them to the chosen harness, if any. A missing storage dir is
 // skipped silently (DefaultAdapters).
-func buildAdapters(dirs config.Dirs, chosen session.Harness, warn func(string)) []harness.Adapter {
+func buildAdapters(dirs config.Dirs, chosen session.Harness, warn func(string), verbose func(format string, args ...any)) []harness.Adapter {
 	all := adapters.DefaultAdapters(adapters.Dirs{
 		Claude:   dirs.Claude,
 		Codex:    dirs.Codex,
 		OpenCode: dirs.OpenCode,
-	}, warn)
+	}, warn, verbose)
 	if chosen == "" {
 		return all
 	}

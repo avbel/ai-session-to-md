@@ -2,6 +2,7 @@ package reduce
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -157,7 +158,7 @@ func TestRenderAllKeepsLastReasoningTurns(t *testing.T) {
 	for i := range turns {
 		turns[i] = session.Turn{Kind: session.Reasoning, Text: fmt.Sprintf("r%d", i+1)}
 	}
-	blocks := renderAll(turns, tailLimits())
+	blocks := slices.DeleteFunc(renderAll(turns, tailLimits()), func(b string) bool { return b == "" })
 	if len(blocks) != 3 {
 		t.Fatalf("got %d blocks, want the last 3 reasoning turns", len(blocks))
 	}
@@ -174,7 +175,7 @@ func TestOlderLimitsDropReasoning(t *testing.T) {
 		{Kind: session.Reasoning, Text: "hidden"},
 		{Kind: session.UserText, Text: "hi"},
 	}
-	blocks := renderAll(turns, olderLimits())
+	blocks := slices.DeleteFunc(renderAll(turns, olderLimits()), func(b string) bool { return b == "" })
 	if len(blocks) != 1 || !strings.Contains(blocks[0], "[#2 user] hi") {
 		t.Errorf("older rendering must drop reasoning: %v", blocks)
 	}
