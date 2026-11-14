@@ -23,7 +23,8 @@ want="$(cat .golangci-version)"
 if ! command -v golangci-lint >/dev/null 2>&1; then
     fail "install golangci-lint ${want}: brew install golangci-lint"
 fi
-have="$(golangci-lint version 2>/dev/null | grep -o 'v[0-9][^ ,]*' | head -1 || true)"
+have="$(golangci-lint version 2>/dev/null | grep -o 'version v\?[0-9][0-9.]*' | grep -o '[0-9][0-9.]*' | head -1 || true)"
+have="v${have}"
 if [ "$have" != "$want" ]; then
     echo "lint: warning: golangci-lint ${have} installed, expected ${want}; continuing" >&2
 fi
