@@ -8,15 +8,21 @@ import (
 )
 
 // Result carries the redacted text and how many matches each kind had.
+// Counts includes the "home" replacements; Total() does not.
 type Result struct {
 	Text   string
 	Counts map[string]int
 }
 
-// Total is the number of redactions across all kinds.
+// Total is the number of redacted secrets across all kinds. Home-dir
+// replacements are not secrets, so a session whose only redaction was
+// path folding reports 0.
 func (r Result) Total() int {
 	total := 0
-	for _, n := range r.Counts {
+	for kind, n := range r.Counts {
+		if kind == homeKind {
+			continue
+		}
 		total += n
 	}
 	return total
@@ -82,21 +88,70 @@ func New(opts ...Option) (*Redactor, error) {
 	return &Redactor{rules: rules, home: home}, nil
 }
 
-// Apply replaces the home dir with ~, then runs every pattern over the full
-// text. Call it on untruncated values; a cut secret no longer matches.
+// Apply runs every pattern over the full, untruncated text, then replaces
+// the home dir with ~. Patterns must run first: a naive early home
+// replacement would corrupt what they match (with HOME=/ every "/" would
+// become "~" before any URL rule could see it). A cut secret no longer
+// matches, so call it on untruncated values.
 func (r *Redactor) Apply(text string) Result {
 	counts := make(map[string]int)
 	if text == "" {
 		return Result{Text: "", Counts: counts}
 	}
-	if r.home != "" {
-		if n := strings.Count(text, r.home); n > 0 {
-			counts["home"] = n
-			text = strings.ReplaceAll(text, r.home, "~")
-		}
-	}
 	for _, ru := range r.rules {
 		text = ru.apply(text, counts)
 	}
+	if len(r.home) > 1 {
+		var n int
+		text, n = replaceHome(text, r.home)
+		if n > 0 {
+			counts[homeKind] = n
+		}
+	}
 	return Result{Text: text, Counts: counts}
+}
+
+// homeKind counts home-dir replacements in Counts, but is excluded from
+// Total() because a folded path is not a secret.
+const homeKind = "home"
+
+// replaceHome replaces occurrences of home with ~ only at path boundaries:
+// the character after the match is "/", a non-path character, or the end
+// of the text. With home /Users/al, /Users/alice keeps its name.
+func replaceHome(text, home string) (string, int) {
+	var b strings.Builder
+	b.Grow(len(text))
+	n := 0
+	for {
+		i := strings.Index(text, home)
+		if i < 0 {
+			break
+		}
+		end := i + len(home)
+		b.WriteString(text[:i])
+		if end < len(text) && isPathChar(text[end]) {
+			b.WriteString(home)
+		} else {
+			b.WriteByte('~')
+			n++
+		}
+		text = text[end:]
+	}
+	b.WriteString(text)
+	return b.String(), n
+}
+
+// isPathChar reports whether c continues a path name right after the home
+// prefix, so replacing before it would corrupt a longer name ("/Users/al"
+// in "/Users/alice" or "/Users/al.txt"). "/" is NOT a path char: it starts
+// the path under home ("~/x").
+func isPathChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '_' || c == '-' || c == '.':
+		return true
+	default:
+		return false
+	}
 }

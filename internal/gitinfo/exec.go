@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -13,13 +14,15 @@ import (
 
 // gitPrefix hardens every git invocation. The session cwd comes from
 // untrusted session data, and repo-local config can execute code, so pager,
-// fsmonitor, external diff and hooks are all disabled up front.
+// fsmonitor, external diff, hooks and log signature verification are all
+// disabled up front.
 var gitPrefix = []string{
 	"--no-pager",
 	"-c", "core.fsmonitor=false",
 	"-c", "diff.external=",
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.pager=cat",
+	"-c", "log.showSignature=false",
 }
 
 // gitOut runs one hardened git command in dir with a 5s timeout and returns
@@ -76,11 +79,37 @@ func firstLine(b []byte) string {
 	return s
 }
 
-// credRe matches a scheme followed by user:password@, as `remote get-url`
-// returns it for private remotes.
-var credRe = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]+:[^/@]*@`)
+// hasLocalDrivers reports whether the repo's own config declares any
+// smudge/clean filter or diff driver. Such a driver runs when git reads
+// worktree paths, so `status` and `diff --stat` are skipped while it is
+// configured. A failed or empty listing means no driver: proceed.
+func hasLocalDrivers(ctx context.Context, root string) bool {
+	out, err := gitOut(ctx, root, "config", "--local", "--get-regexp", `^(filter|diff)\.`)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
 
-// stripCredentials removes user:password@ from a remote URL.
-func stripCredentials(url string) string {
-	return credRe.ReplaceAllString(strings.TrimSpace(url), "$1")
+// credRe is the fallback for URLs net/url cannot parse (for example a
+// password containing "/", which lands in the host part). It matches
+// scheme://user:password@ with the password allowed to contain "/" and end
+// at "@".
+var credRe = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+:[^@\s]*@`)
+
+// stripCredentials removes the userinfo — user:password@ or a token on its
+// own — from a scheme:// URL, by clearing url.URL.User. scp-style remotes
+// (git@host:path) carry no credential: url.Parse rejects them and the
+// fallback regex needs a "://", so they pass through unchanged.
+func stripCredentials(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil {
+		return credRe.ReplaceAllString(raw, "$1")
+	}
+	if u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }

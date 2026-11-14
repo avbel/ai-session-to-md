@@ -33,6 +33,29 @@ func (e ErrAmbiguous) Error() string {
 	return fmt.Sprintf("session id prefix %q is ambiguous: %d matches", e.Prefix, len(e.Matches))
 }
 
+// AdapterError is one harness adapter's listing failure, kept typed so the
+// CLI can branch on the cause with errors.Is/As even when the other
+// harnesses listed fine — e.g. OpenCode's fallback mode:
+//
+//	var ae *harness.AdapterError
+//	if errors.As(err, &ae) && ae.Harness == session.HarnessOpenCode &&
+//		errors.Is(ae.Err, opencode.ErrFallbackNeedsID) { …enter fallback… }
+//
+// Registry.Resolve attaches every AdapterError to its no-match error, and
+// the all-adapters-failed error wraps them in an errors.Join.
+type AdapterError struct {
+	Harness session.Harness
+	Err     error
+}
+
+func (e *AdapterError) Error() string {
+	return fmt.Sprintf("listing %s failed: %v", e.Harness, e.Err)
+}
+
+func (e *AdapterError) Unwrap() error {
+	return e.Err
+}
+
 var idPrefixRe = regexp.MustCompile(`^[A-Za-z0-9_-]{6,}$`)
 
 // ValidatePrefix enforces the session id argument rules: at least six
@@ -86,7 +109,7 @@ func (r *Registry) Register(a Adapter) {
 // harnesses still contribute; when every adapter fails, the joined error is
 // returned so a broken store does not read as "no sessions found".
 func (r *Registry) List(ctx context.Context, opt ListOptions) ([]session.Meta, []string, error) {
-	metas, warns, err := r.fetchAll(ctx, opt)
+	metas, warns, _, err := r.fetchAll(ctx, opt)
 	if err != nil {
 		return nil, warns, err
 	}
@@ -97,23 +120,32 @@ func (r *Registry) List(ctx context.Context, opt ListOptions) ([]session.Meta, [
 // Resolve matches a validated session id prefix against every registered
 // harness's session ids, with no scope, no limit and archived sessions
 // included. Exactly one match is returned. Zero matches yield ErrNoSessions
-// and several yield ErrAmbiguous carrying every hit, sorted newest first,
-// for the caller to print.
+// (with every AdapterError attached, so a typed cause like
+// opencode.ErrFallbackNeedsID stays inspectable) and several yield
+// ErrAmbiguous carrying every hit, sorted newest first, for the caller to
+// print. Per-adapter warnings are emitted exactly once, here via the warn
+// hook.
 func (r *Registry) Resolve(ctx context.Context, prefix string) (session.Meta, error) {
 	if err := ValidatePrefix(prefix); err != nil {
 		return session.Meta{}, err
 	}
-	metas, warns, err := r.fetchAll(ctx, ListOptions{Scope: Scope{All: true}, IncludeArchived: true})
+	metas, _, adapterErrs, err := r.fetchAll(ctx, ListOptions{Scope: Scope{All: true}, IncludeArchived: true})
 	if err != nil {
 		return session.Meta{}, err
-	}
-	for _, w := range warns {
-		r.warn(w)
 	}
 	matches := metasWithPrefix(metas, prefix)
 	switch len(matches) {
 	case 0:
-		return session.Meta{}, fmt.Errorf("no session matching %q: %w", prefix, ErrNoSessions)
+		noMatch := fmt.Errorf("no session matching %q: %w", prefix, ErrNoSessions)
+		if len(adapterErrs) == 0 {
+			return session.Meta{}, noMatch
+		}
+		joined := make([]error, 0, len(adapterErrs)+1)
+		joined = append(joined, noMatch)
+		for _, ae := range adapterErrs {
+			joined = append(joined, ae)
+		}
+		return session.Meta{}, errors.Join(joined...)
 	case 1:
 		return matches[0], nil
 	default:
@@ -128,9 +160,11 @@ type fetchResult struct {
 }
 
 // fetchAll queries every adapter concurrently and returns the unmerged,
-// unsorted metas plus one warning per failing adapter. It errors only when
-// every registered adapter failed, and never when none is registered.
-func (r *Registry) fetchAll(ctx context.Context, opt ListOptions) ([]session.Meta, []string, error) {
+// unsorted metas, one warning string per failing adapter (also emitted
+// through the warn hook — the single warning site), the typed per-adapter
+// errors for callers that need the causes, and an error only when every
+// registered adapter failed (never when none is registered).
+func (r *Registry) fetchAll(ctx context.Context, opt ListOptions) ([]session.Meta, []string, []*AdapterError, error) {
 	outcomes := make([]fetchResult, len(r.adapters))
 	var wg sync.WaitGroup
 	for i, ad := range r.adapters {
@@ -142,22 +176,28 @@ func (r *Registry) fetchAll(ctx context.Context, opt ListOptions) ([]session.Met
 	wg.Wait()
 
 	warns := make([]string, 0, len(outcomes))
+	var errs []*AdapterError
 	failed := 0
 	var merged []session.Meta
 	for i, o := range outcomes {
 		if o.err != nil {
 			failed++
-			msg := fmt.Sprintf("listing %s failed: %v", r.adapters[i].Name(), o.err)
-			warns = append(warns, msg)
-			r.warn(msg)
+			ae := &AdapterError{Harness: r.adapters[i].Name(), Err: o.err}
+			errs = append(errs, ae)
+			warns = append(warns, ae.Error())
+			r.warn(ae.Error())
 			continue
 		}
 		merged = append(merged, o.metas...)
 	}
 	if failed == len(r.adapters) && len(r.adapters) > 0 {
-		return nil, warns, fmt.Errorf("every harness listing failed: %s", strings.Join(warns, "; "))
+		joined := make([]error, len(errs))
+		for i, ae := range errs {
+			joined[i] = ae
+		}
+		return nil, warns, errs, fmt.Errorf("every harness listing failed: %w", errors.Join(joined...))
 	}
-	return merged, warns, nil
+	return merged, warns, errs, nil
 }
 
 func metasWithPrefix(metas []session.Meta, prefix string) []session.Meta {

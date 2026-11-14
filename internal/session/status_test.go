@@ -259,6 +259,93 @@ func TestDeriveTrailingQuestion(t *testing.T) {
 	if st.Text != "waiting for user answer" {
 		t.Fatalf("got %q", st.Text)
 	}
+	if st.PendingToolName != "" || st.PendingToolInput != "" {
+		t.Fatalf("trailing question must leave PendingTool empty, got %q / %q",
+			st.PendingToolName, st.PendingToolInput)
+	}
+}
+
+func TestDeriveTrailingQuestionAfterCompletedTool(t *testing.T) {
+	// The trailing-? branch must not resurrect an unrelated completed
+	// tool call as the pending tool.
+	s := Session{Turns: []Turn{
+		txt(UserText, "run the tests"),
+		call("c1", "Bash", `{"command":"go test ./..."}`),
+		result("c1", "Tests pass."),
+		txt(AssistantText, "Tests pass. Should I also update the README?"),
+	}}
+	st := Derive(s, Info{})
+	if st.Text != "waiting for user answer" {
+		t.Fatalf("got %q", st.Text)
+	}
+	if st.PendingToolName != "" {
+		t.Fatalf("PendingToolName = %q, want empty", st.PendingToolName)
+	}
+}
+
+func TestDeriveOpenCodePendingQuestionBeatsFinishNull(t *testing.T) {
+	// OpenCode: question tool still pending, last assistant message has
+	// no finish → the question wins over "assistant turn incomplete".
+	s := Session{Turns: []Turn{
+		txt(UserText, "which database?"),
+		txt(AssistantText, "let me ask"),
+		call("c1", "question", `{"question":"postgres or sqlite?"}`),
+	}}
+	st := Derive(s, Info{HasFinish: true})
+	if st.Text != "waiting for user answer" {
+		t.Fatalf("got %q", st.Text)
+	}
+	if st.PendingToolName != "question" {
+		t.Fatalf("pending name %q", st.PendingToolName)
+	}
+}
+
+func TestDeriveCodexPendingQuestionBeatsMidTurn(t *testing.T) {
+	// Codex: request_user_input pending, task_started without
+	// task_complete → the question wins over "stopped mid-turn".
+	s := Session{Turns: []Turn{
+		txt(UserText, "go on"),
+		call("c1", "request_user_input_async", `{"prompt":"continue?"}`),
+	}}
+	st := Derive(s, Info{MidTurn: true})
+	if st.Text != "waiting for user answer" {
+		t.Fatalf("got %q", st.Text)
+	}
+	if st.PendingToolName != "request_user_input_async" {
+		t.Fatalf("pending name %q", st.PendingToolName)
+	}
+}
+
+func TestDeriveMixedPendingAppliesToolCallRule(t *testing.T) {
+	// A pending question next to a pending normal call: the normal call
+	// still reports "stopped during tool call".
+	s := Session{Turns: []Turn{
+		txt(UserText, "do both"),
+		call("c1", "AskUserQuestion", `{"q":"which?"}`),
+		call("c2", "Bash", `{"command":"make"}`),
+	}}
+	st := Derive(s, Info{})
+	if st.Text != "stopped during tool call Bash" {
+		t.Fatalf("got %q", st.Text)
+	}
+	if st.PendingToolName != "Bash" {
+		t.Fatalf("pending name %q", st.PendingToolName)
+	}
+}
+
+func TestDeriveMixedPendingQuestionLastStillNormal(t *testing.T) {
+	s := Session{Turns: []Turn{
+		txt(UserText, "do both"),
+		call("c1", "Bash", `{"command":"make"}`),
+		call("c2", "AskUserQuestion", `{"q":"which?"}`),
+	}}
+	st := Derive(s, Info{})
+	if st.Text != "stopped during tool call Bash" {
+		t.Fatalf("got %q", st.Text)
+	}
+	if st.PendingToolName != "Bash" {
+		t.Fatalf("pending name %q", st.PendingToolName)
+	}
 }
 
 func TestDeriveTrailingQuestionThenWorkContinues(t *testing.T) {

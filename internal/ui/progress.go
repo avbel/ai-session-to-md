@@ -16,6 +16,10 @@ const spinnerTick = 90 * time.Millisecond
 // spinTick is the tick used by the animation loop; tests shrink it.
 var spinTick = spinnerTick
 
+// spinnerReserve reserves cells for the frame glyph, the separator and the
+// possible elapsed suffix when clipping step text to the terminal width.
+const spinnerReserve = 10
+
 // Spinner is one progress step. On a TTY it animates a line on stderr; in
 // non-TTY mode it prints the step once; in quiet mode it says nothing.
 type Spinner struct {
@@ -27,19 +31,21 @@ type Spinner struct {
 	text   string
 	still  bool
 	tty    bool
+	start  time.Time
 	active atomic.Bool
 }
 
 // Step starts a progress step; call Stop when it finishes. Update changes
 // the text while running (e.g. "summarizing chunk 2").
 func (u *UI) Step(text string) *Spinner {
-	s := &Spinner{u: u, stop: make(chan struct{}), done: make(chan struct{}), text: text}
+	s := &Spinner{u: u, stop: make(chan struct{}), done: make(chan struct{}), text: text, start: time.Now()}
 	switch {
 	case u.Quiet:
 		s.still = true
 	case u.ErrTTY:
 		s.tty = true
 		s.active.Store(true)
+		u.spins.Add(1)
 		go s.animate()
 	default:
 		s.still = true
@@ -59,7 +65,8 @@ func (s *Spinner) animate() {
 			s.mu.Lock()
 			text := s.text
 			s.mu.Unlock()
-			_, _ = fmt.Fprintf(s.u.Stderr, "\r%s %s", frameGlyph(frame), text)
+			_, _ = fmt.Fprintf(s.u.Stderr, "\r\x1b[2K%s %s%s",
+				frameGlyph(frame), s.clip(text), s.elapsed())
 			frame++
 		}
 	}
@@ -69,6 +76,29 @@ func frameGlyph(i int) string {
 	return string([]rune(spinnerFrames)[i%len([]rune(spinnerFrames))])
 }
 
+// clip keeps the step text inside the terminal width, leaving room for the
+// frame and the elapsed suffix.
+func (s *Spinner) clip(text string) string {
+	return truncCells(text, max(s.u.width-spinnerReserve, 10))
+}
+
+// elapsed is appended to the step text after a few seconds, e.g. " · 2m14s".
+func (s *Spinner) elapsed() string {
+	d := time.Since(s.start)
+	if d < 5*time.Second {
+		return ""
+	}
+	return " · " + fmtDuration(d)
+}
+
+func fmtDuration(d time.Duration) string {
+	secs := int(d.Seconds())
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	return fmt.Sprintf("%dm%02ds", secs/60, secs%60)
+}
+
 // Update replaces the step text.
 func (s *Spinner) Update(text string) {
 	s.mu.Lock()
@@ -76,29 +106,34 @@ func (s *Spinner) Update(text string) {
 	s.mu.Unlock()
 }
 
-// Stop ends the step, erasing the spinner line on a TTY. Idempotent.
+// Stop ends the step, clearing the spinner line on a TTY. Idempotent.
 func (s *Spinner) Stop() {
 	s.once.Do(func() {
-		if !s.tty {
-			close(s.done)
+		if s.tty {
+			s.u.spins.Add(-1)
+			close(s.stop)
+			<-s.done
+			s.active.Store(false)
+			_, _ = fmt.Fprint(s.u.Stderr, "\r\x1b[2K")
 			return
 		}
-		close(s.stop)
-		<-s.done
-		s.active.Store(false)
-		s.mu.Lock()
-		width := max(len([]rune(s.text))+4, 12)
-		s.mu.Unlock()
-		_, _ = fmt.Fprintf(s.u.Stderr, "\r%s\r", strings.Repeat(" ", width))
+		close(s.done)
 	})
+}
+
+// Redactions summarizes what the redactor counted, for the final line.
+type Redactions struct {
+	Total int
+	// Kinds is the redaction kind names, most frequent first.
+	Kinds []string
 }
 
 // Final prints the closing status line:
 //
-//	✓ wrote CODEX.md (12.3 KB) · 45k→3k tokens · redacted 2 secrets
+//	✓ wrote CODEX.md (12.3 KB) · 45k→3k tokens · redacted 2 secrets (aws_key, jwt)
 //
 // In quiet mode only the path (or "stdout") is printed.
-func (u *UI) Final(path string, size int, tokensBefore, tokensAfter, redacted int) {
+func (u *UI) Final(path string, size int, tokensBefore, tokensAfter int, red Redactions) {
 	if u.Quiet {
 		u.printLine(path)
 		return
@@ -110,10 +145,27 @@ func (u *UI) Final(path string, size int, tokensBefore, tokensAfter, redacted in
 		parts = append(parts, u.green(fmt.Sprintf("✓ wrote %s (%s)", path, humanBytes(size))))
 	}
 	parts = append(parts, fmt.Sprintf("%s→%s tokens", humanTokens(tokensBefore), humanTokens(tokensAfter)))
-	if redacted > 0 {
-		parts = append(parts, fmt.Sprintf("redacted %d secrets", redacted))
+	if line := redactedLine(red); line != "" {
+		parts = append(parts, line)
 	}
 	u.printLine(strings.Join(parts, " · "))
+}
+
+// redactedLine pluralizes correctly and names the kinds when there are only
+// a few.
+func redactedLine(red Redactions) string {
+	if red.Total <= 0 {
+		return ""
+	}
+	unit := "secrets"
+	if red.Total == 1 {
+		unit = "secret"
+	}
+	line := fmt.Sprintf("redacted %d %s", red.Total, unit)
+	if len(red.Kinds) > 0 && len(red.Kinds) <= 3 {
+		line += " (" + strings.Join(red.Kinds, ", ") + ")"
+	}
+	return line
 }
 
 // Warn prints one warning line as "⚠ …"; suppressed in quiet mode.
@@ -123,6 +175,20 @@ func (u *UI) Warn(msg string) {
 	}
 	u.printLine(u.yellow("⚠ " + msg))
 }
+
+// Fail prints a failure line as "✗ msg" (red ✗ on a color TTY). Errors are
+// printed in quiet mode too.
+func (u *UI) Fail(msg string) {
+	u.printLine(u.red("✗ " + msg))
+}
+
+// Hint prints an indented follow-up suggestion under a failure line.
+func (u *UI) Hint(text string) {
+	u.printLine(u.dim("  hint: " + text))
+}
+
+// Width is the terminal width the UI lays out to; 100 when unknown.
+func (u *UI) Width() int { return u.width }
 
 // humanBytes renders a size like "12.3 KB".
 func humanBytes(n int) string {

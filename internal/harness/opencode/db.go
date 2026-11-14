@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -83,10 +84,21 @@ func sqliteURI(path string) string {
 	// filename byte, so Windows drive paths must be converted explicitly.
 	slash := strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
 	if !filepath.IsAbs(path) && !winDrive.MatchString(slash) {
-		return "file:" + slash
+		return "file:" + escapeSegments(slash)
 	}
 	if !strings.HasPrefix(slash, "/") {
 		slash = "/" + slash
 	}
-	return "file://" + slash
+	return "file://" + escapeSegments(slash)
+}
+
+// escapeSegments percent-escapes every path segment; the SQLite driver
+// decodes the URI path itself, so # or ? in a directory name cannot truncate
+// the URI or turn the mode=ro query parameter into part of the filename.
+func escapeSegments(p string) string {
+	seg := strings.Split(p, "/")
+	for i, s := range seg {
+		seg[i] = url.PathEscape(s)
+	}
+	return strings.Join(seg, "/")
 }

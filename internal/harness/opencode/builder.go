@@ -88,16 +88,19 @@ func (b *builder) addMsg(m msg) {
 
 func (b *builder) addUser(m msg) {
 	text := m.Data.Text
-	for _, name := range fileNames(m.Data.Files) {
+	names := fileNames(m.Data.Files)
+	if strings.TrimSpace(text) == "" && len(names) == 0 {
+		// Real stores contain many empty user rows ({text:"", time}); they
+		// are empty, not unparseable, so drop them without counting toward
+		// Skipped.
+		return
+	}
+	for _, name := range names {
 		if text == "" {
 			text = "[file: " + name + "]"
 		} else {
 			text += " [file: " + name + "]"
 		}
-	}
-	if strings.TrimSpace(text) == "" {
-		b.skipped++
-		return
 	}
 	b.append(session.Turn{Kind: session.UserText, Time: m.Time, Text: text})
 }

@@ -6,8 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/avbel/ai-session-to-md/internal/session"
 )
+
+// lipglossWidth measures a string in display cells.
+func lipglossWidth(s string) int { return lipgloss.Width(s) }
 
 func TestFormatAge(t *testing.T) {
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
@@ -39,41 +43,54 @@ func TestFormatAge(t *testing.T) {
 	}
 }
 
-func TestMiddleTruncate(t *testing.T) {
+func TestTruncCells(t *testing.T) {
+	if got := truncCells("abcdefgh", 5); got != "abcd…" {
+		t.Errorf("truncCells = %q, want abcd…", got)
+	}
+	if got := truncCells("abc", 5); got != "abc" {
+		t.Errorf("short = %q, want abc", got)
+	}
+	if got := truncCells("abcdef", 0); got != "" {
+		t.Errorf("zero = %q", got)
+	}
+	if got := truncCells("abc", 1); got != "…" {
+		t.Errorf("max=1 = %q, want …", got)
+	}
+	// Cells, not runes: two wide runes plus the ellipsis are 3 cells.
+	if got := truncCells("日本語", 3); got != "日…" {
+		t.Errorf("wide = %q, want 日…", got)
+	}
+	if w := lipglossWidth(truncCells("日本語", 3)); w > 3 {
+		t.Errorf("wide truncation is %d cells wide", w)
+	}
+}
+
+func TestMiddleCells(t *testing.T) {
+	if got := middleCells("abcdefghij", 5); got != "ab…ij" {
+		t.Errorf("middleCells = %q, want ab…ij", got)
+	}
+	if got := middleCells("abc", 1); got != "…" {
+		t.Errorf("max=1 = %q", got)
+	}
+	if got := middleCells("日本語テスト", 3); got != "…ト" {
+		t.Errorf("runes = %q, want …ト", got)
+	}
+}
+
+func TestMiddleTruncatePathKeepsLastSegment(t *testing.T) {
 	tests := []struct {
 		in   string
 		max  int
 		want string
 	}{
+		{"~/Projects/api", 12, "~/Proje…/api"},
+		{"~/Projects/x/y/ai-session-to-md", 20, "~/…/ai-session-to-md"},
 		{"short", 10, "short"},
-		{"exactly10ch", 11, "exactly10ch"},
 	}
-	// The third case is built to be readable; verify by shape instead.
-	for _, tt := range tests[:2] {
-		if got := middleTruncate(tt.in, tt.max); got != tt.in {
-			t.Errorf("middleTruncate(%q, %d) = %q", tt.in, tt.max, got)
+	for _, tt := range tests {
+		if got := middleTruncatePath(tt.in, tt.max); got != tt.want {
+			t.Errorf("middleTruncatePath(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
 		}
-	}
-	if got := middleTruncate("abcdefghij", 5); got != "ab…ij" {
-		t.Errorf("middleTruncate = %q, want ab…ij", got)
-	}
-	if got := middleTruncate("abc", 1); got != "…" {
-		t.Errorf("max=1 = %q", got)
-	}
-	if got := middleTruncate("日本語テスト", 3); got != "日…ト" {
-		t.Errorf("runes = %q", got)
-	}
-}
-
-func TestTruncRight(t *testing.T) {
-	if got := truncRight("abcdefgh", 5); got != "abcd…" {
-		t.Errorf("truncRight = %q", got)
-	}
-	if got := truncRight("abc", 5); got != "abc" {
-		t.Errorf("short = %q", got)
-	}
-	if got := truncRight("abcdef", 0); got != "" {
-		t.Errorf("zero = %q", got)
 	}
 }
 
@@ -86,8 +103,8 @@ func TestRelHome(t *testing.T) {
 		{"", "-"},
 	}
 	for _, tt := range tests {
-		if got := relHome(tt.in, home); got != tt.want {
-			t.Errorf("relHome(%q) = %q, want %q", tt.in, got, tt.want)
+		if got := RelHome(tt.in, home); got != tt.want {
+			t.Errorf("RelHome(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }
@@ -102,14 +119,58 @@ func TestFormatRow(t *testing.T) {
 		Branch:    "main",
 		UpdatedAt: now.Add(-3 * time.Hour),
 	}
-	row := FormatRow(m, now, "/home/u", 60)
-	for _, want := range []string{"3h", "codex", "~/proj/sub", "main", "Fix the reducer budget overflow"} {
+	other := m
+	other.Cwd = "/home/u/other"
+	layout := newPickLayout([]session.Meta{m, other}, "/home/u", "/home/u", 80)
+	row := layout.row(m, now)
+	for _, want := range []string{"3h", "codex", "proj/sub", "main", "Fix the reducer budget overflow"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("row %q missing %q", row, want)
 		}
 	}
 	if !strings.HasPrefix(row, "3h") {
 		t.Errorf("row %q does not start with the age column", row)
+	}
+	// The harness column uses the short name: "codex" fits, "claude-code" would not.
+	if !strings.Contains(row, "codex") {
+		t.Errorf("row %q missing the short harness name", row)
+	}
+}
+
+func TestPickLayoutHidesSharedProject(t *testing.T) {
+	now := time.Now()
+	metas := []session.Meta{
+		{Harness: "codex", Title: "one", Cwd: "/home/u/proj", UpdatedAt: now},
+		{Harness: "codex", Title: "two", Cwd: "/home/u/proj", UpdatedAt: now},
+	}
+	l := newPickLayout(metas, "/home/u", "/home/u/proj", 80)
+	if l.showProject {
+		t.Error("project column must be hidden when every row shares the root")
+	}
+	if strings.Contains(l.header(), "project") {
+		t.Errorf("header %q has a project column", l.header())
+	}
+	rows := l.rows(metas, now)
+	for i, row := range rows {
+		if !strings.Contains(row, metas[i].Title) {
+			t.Errorf("row %d %q missing its title", i, row)
+		}
+	}
+}
+
+func TestPickLayoutShowsMixedProjects(t *testing.T) {
+	now := time.Now()
+	metas := []session.Meta{
+		{Harness: "codex", Title: "one", Cwd: "/home/u/proj", UpdatedAt: now},
+		{Harness: "codex", Title: "two", Cwd: "/home/u/other", UpdatedAt: now},
+	}
+	l := newPickLayout(metas, "/home/u", "/home/u", 80)
+	if !l.showProject {
+		t.Error("project column must show when rows differ")
+	}
+	header := l.header()
+	if !strings.Contains(header, "project") {
+		t.Errorf("header %q has no project column", header)
 	}
 }
 
@@ -126,10 +187,10 @@ func TestFormatRowsTruncatesToWidth(t *testing.T) {
 			UpdatedAt: now,
 		})
 	}
-	rows := FormatRows(metas, now, "/home/u", 80)
-	for i, row := range rows {
-		if n := len([]rune(row)); n > 80 {
-			t.Errorf("row %d is %d runes wide: %q", i, n, row)
+	l := newPickLayout(metas, "/home/u", "/home/u", 80)
+	for i, row := range l.rows(metas, now) {
+		if n := lipglossWidth(row); n > 80 {
+			t.Errorf("row %d is %d cells wide: %q", i, n, row)
 		}
 	}
 }
@@ -137,9 +198,27 @@ func TestFormatRowsTruncatesToWidth(t *testing.T) {
 func TestFormatRowsMinimalWidth(t *testing.T) {
 	now := time.Now()
 	metas := []session.Meta{{Harness: "codex", Title: "hello", UpdatedAt: now}}
-	rows := FormatRows(metas, now, "", 20)
+	l := newPickLayout(metas, "", "", 20)
+	rows := l.rows(metas, now)
 	if len(rows) != 1 || !strings.Contains(rows[0], "hello") {
 		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+func TestFormatMatches(t *testing.T) {
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	metas := []session.Meta{
+		{Harness: session.HarnessClaudeCode, ID: "dupsess-aaaaaa", Title: "first duplicate session", Branch: "main", UpdatedAt: now.Add(-time.Hour)},
+		{Harness: session.HarnessCodex, ID: "dupsess-bbbbbb", Title: "second duplicate session", Branch: "dev", UpdatedAt: now},
+	}
+	rows := FormatMatches(metas, now, 100)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	for i, want := range []string{"dupsess-aaaaaa", "dupsess-bbbbbb"} {
+		if !strings.Contains(rows[i], want) {
+			t.Errorf("row %d %q missing id %q", i, rows[i], want)
+		}
 	}
 }
 
@@ -167,7 +246,7 @@ func TestNewColorRules(t *testing.T) {
 func TestPickNilStdinCancelled(t *testing.T) {
 	var sink strings.Builder
 	u := New(&sink, nil, true, false, Options{})
-	_, err := u.Pick(t.Context(), nil, "/root", time.Now())
+	_, err := u.Pick(t.Context(), nil, "/root", false, time.Now())
 	if err == nil || !errors.Is(err, ErrNoSessions) {
 		t.Fatalf("empty list = %v, want ErrNoSessions", err)
 	}

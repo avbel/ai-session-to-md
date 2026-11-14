@@ -107,13 +107,14 @@ func loadThreadNames(dir string) map[string]string {
 }
 
 // resolveRollout finds an existing rollout file for a thread: the stored
-// path (re-rooted under the codex dir when its prefix points elsewhere),
+// path re-rooted under the codex dir (preferred — a crafted database must not
+// point reads outside the harness dir), then the stored path as recorded,
 // then archived_sessions/<base>.zst, then the sessions glob by thread id.
 func (a *Adapter) resolveRollout(stored, id string) string {
-	if p := a.statCandidate(stored); p != "" {
+	if p := a.statCandidate(reRooted(stored, a.dir)); p != "" {
 		return p
 	}
-	if p := a.statCandidate(reRooted(stored, a.dir)); p != "" {
+	if p := a.statCandidate(stored); p != "" {
 		return p
 	}
 	if p := a.statCandidate(archivedCandidate(stored, a.dir)); p != "" {
@@ -127,13 +128,15 @@ func (a *Adapter) resolveRollout(stored, id string) string {
 	return ""
 }
 
-// statCandidate returns path when it exists as a non-empty regular file.
+// statCandidate returns path when it exists as a regular file. Directories,
+// FIFOs, sockets and devices are refused: a crafted rollout_path pointing at
+// /dev/zero would hang or OOM the reader.
 func (a *Adapter) statCandidate(path string) string {
 	if path == "" {
 		return ""
 	}
 	fi, err := os.Stat(path)
-	if err != nil || fi.IsDir() {
+	if err != nil || !fi.Mode().IsRegular() {
 		return ""
 	}
 	return path

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -24,13 +25,15 @@ const (
 var errExportShape = errors.New("export shape not recognised")
 
 type exportInfo struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	Directory    string `json:"directory"`
-	Model        string `json:"model"`
-	Version      string `json:"version"`
-	TimeUpdated  *int64 `json:"time_updated"`
-	TimeArchived *int64 `json:"time_archived"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Directory string `json:"directory"`
+	// Model may be a JSON string or a {"id","providerID"} object, depending
+	// on the export version; a typed string field fails the whole document.
+	Model        json.RawMessage `json:"model"`
+	Version      string          `json:"version"`
+	TimeUpdated  json.RawMessage `json:"time_updated"`
+	TimeArchived json.RawMessage `json:"time_archived"`
 }
 
 // exportMsg is one export message: the type plus the same fields as a
@@ -64,7 +67,7 @@ func (a *Adapter) buildExport(ctx context.Context, m session.Meta, out []byte) (
 		return LoadResult{}, fmt.Errorf("unsupported OpenCode version %s", a.opencodeVersion(ctx))
 	}
 	b := newBuilder(exportMeta(m, doc.Info))
-	b.model = modelJSON(doc.Info.Model)
+	b.model = modelJSON(string(doc.Info.Model))
 	b.ver = doc.Info.Version
 	for _, em := range doc.Messages {
 		b.addMsg(msg{Type: em.Type, Data: em.msgData})
@@ -73,31 +76,45 @@ func (a *Adapter) buildExport(ctx context.Context, m session.Meta, out []byte) (
 }
 
 func exportMeta(m session.Meta, info exportInfo) session.Meta {
-	base := session.Meta{
+	return session.Meta{
 		Harness:   session.HarnessOpenCode,
 		ID:        m.ID,
 		Source:    "opencode session export #" + m.ID,
 		Title:     cmp.Or(info.Title, m.Title),
 		Cwd:       cmp.Or(info.Directory, m.Cwd),
-		UpdatedAt: msTime(cmp.Or(derefPtr(info.TimeUpdated), 0)),
-		Archived:  info.TimeArchived != nil,
+		UpdatedAt: msTime(msField(info.TimeUpdated)),
+		Archived:  !isNullJSON(info.TimeArchived),
 	}
-	return base
 }
 
-func derefPtr(p *int64) int64 {
-	if p == nil {
+// msField reads a time field that may be a number or, in other export
+// versions, an object; anything unparseable counts as absent.
+func msField(raw json.RawMessage) int64 {
+	if isNullJSON(raw) {
 		return 0
 	}
-	return *p
+	var ms int64
+	if json.Unmarshal(raw, &ms) == nil {
+		return ms
+	}
+	return 0
+}
+
+func isNullJSON(raw json.RawMessage) bool {
+	return len(raw) == 0 || string(raw) == "null"
 }
 
 // runExport execs `opencode session export <id>` with no shell; the id is a
 // separate argv element and was validated by the caller and by validSessionID.
+// The exec runs from the user's home, never the session's (untrusted) cwd: a
+// repo-local config or hook must not get a chance to run.
 func (a *Adapter) runExport(ctx context.Context, id string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.bin, "session", "export", id)
+	if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

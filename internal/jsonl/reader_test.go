@@ -1,6 +1,7 @@
 package jsonl
 
 import (
+	"encoding/json"
 	"iter"
 	"os"
 	"path/filepath"
@@ -198,6 +199,84 @@ func TestReaderFromIOReader(t *testing.T) {
 	if len(got) != 2 || got[0].line != "one" || got[1].line != "two" {
 		t.Fatalf("got %v", got)
 	}
+}
+
+func TestReaderOverlongLineTruncatedAndSkipped(t *testing.T) {
+	old := maxLineBytes
+	maxLineBytes = 1024
+	t.Cleanup(func() { maxLineBytes = old })
+	big := `{"blob":"` + strings.Repeat("a", 5000) + `"}`
+	content := "{\"small\":1}\n" + big + "\n{\"small\":2}\n"
+	seq := Reader(strings.NewReader(content))
+	var got []indexedLine
+	for i, line := range seq {
+		got = append(got, indexedLine{i: i, line: string(line)})
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d lines, want 3 (reading continues after the huge line)", len(got))
+	}
+	if got[0].line != `{"small":1}` || got[2].line != `{"small":2}` {
+		t.Fatalf("neighbour lines damaged: %v", got)
+	}
+	over := got[1]
+	if over.i != 1 {
+		t.Fatalf("index %d, want 1", over.i)
+	}
+	if len(over.line) != 1024+len(overLongMarker) {
+		t.Fatalf("truncated line is %d bytes, want cap+marker", len(over.line))
+	}
+	if !strings.HasSuffix(over.line, overLongMarker) {
+		t.Fatalf("no truncation marker: %q", tailStr(over.line, 60))
+	}
+	// The truncated line must not parse as JSON, so callers skip it.
+	var v map[string]any
+	if json.Unmarshal([]byte(over.line), &v) == nil {
+		t.Fatal("truncated line must be unparseable")
+	}
+	if !strings.HasPrefix(over.line, `{"blob":"aaa`) {
+		t.Fatalf("truncated line lost its head: %q", over.line[:40])
+	}
+}
+
+func TestReaderOverlongLineWithoutTrailingNewline(t *testing.T) {
+	old := maxLineBytes
+	maxLineBytes = 16
+	t.Cleanup(func() { maxLineBytes = old })
+	seq := Reader(strings.NewReader(strings.Repeat("z", 100)))
+	var got []indexedLine
+	for i, line := range seq {
+		got = append(got, indexedLine{i: i, line: string(line)})
+	}
+	if len(got) != 1 || got[0].i != 0 {
+		t.Fatalf("got %v", got)
+	}
+	if len(got[0].line) != 16+len(overLongMarker) || !strings.HasSuffix(got[0].line, overLongMarker) {
+		t.Fatalf("truncated line = %q", got[0].line)
+	}
+}
+
+func TestReaderLineExactlyAtCap(t *testing.T) {
+	old := maxLineBytes
+	maxLineBytes = 64
+	t.Cleanup(func() { maxLineBytes = old })
+	seq := Reader(strings.NewReader(strings.Repeat("q", 64) + "\nnext\n"))
+	var got []indexedLine
+	for i, line := range seq {
+		got = append(got, indexedLine{i: i, line: string(line)})
+	}
+	if len(got) != 2 || len(got[0].line) != 64 || strings.Contains(got[0].line, "truncated") {
+		t.Fatalf("a line exactly at the cap must not be truncated: %v", got)
+	}
+	if got[1].line != "next" {
+		t.Fatalf("line after the cap boundary = %q", got[1].line)
+	}
+}
+
+func tailStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 func TestReaderEarlyBreak(t *testing.T) {

@@ -111,6 +111,46 @@ func TestBuildExportFixture(t *testing.T) {
 	}
 }
 
+// TestBuildExportTypedModelField reproduces the data.model object bug class:
+// an export whose info.model is a {"id","providerID"} object (and whose time
+// fields are objects) must parse instead of failing the whole document.
+func TestBuildExportTypedModelField(t *testing.T) {
+	raw := `{
+	  "info": {
+	    "id": "ses_typedmod",
+	    "title": "typed model",
+	    "directory": "/proj",
+	    "model": {"id": "gpt-5.2", "providerID": "openai"},
+	    "version": "0.5.0",
+	    "time_updated": {"something": true},
+	    "time_archived": null
+	  },
+	  "messages": [
+	    {"type": "user", "text": "hello"},
+	    {"type": "user", "text": "", "time": 1},
+	    {"type": "assistant", "content": [{"type": "text", "text": "hi"}], "finish": "stop"}
+	  ]
+	}`
+	a := New(t.TempDir())
+	res, err := a.buildExport(t.Context(), session.Meta{ID: "ses_typedmod"}, []byte(raw))
+	if err != nil {
+		t.Fatalf("buildExport with object-typed model: %v", err)
+	}
+	if res.Session.Model != "openai/gpt-5.2" {
+		t.Fatalf("model = %q, want openai/gpt-5.2", res.Session.Model)
+	}
+	if res.Session.Archived {
+		t.Error("null time_archived must not flag archived")
+	}
+	// The empty user row is dropped silently, not counted as unparseable.
+	if res.Session.Skipped != 0 {
+		t.Fatalf("Skipped = %d, want 0 for empty user rows", res.Session.Skipped)
+	}
+	if len(res.Session.Turns) != 2 || res.Session.Turns[0].Text != "hello" {
+		t.Fatalf("turns = %+v", res.Session.Turns)
+	}
+}
+
 func TestParseExportShapeMismatch(t *testing.T) {
 	for _, bad := range []string{`{"info":{}}`, `[]`, `not json`, `{"messages":"nope"}`} {
 		if _, err := parseExport([]byte(bad)); err == nil {

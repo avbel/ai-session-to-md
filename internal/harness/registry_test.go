@@ -337,6 +337,65 @@ func TestResolveRejectsBadPrefix(t *testing.T) {
 	}
 }
 
+func TestResolveWarnsOnce(t *testing.T) {
+	var hooked []string
+	reg := New(WithWarn(func(w string) { hooked = append(hooked, w) }))
+	reg.Register(&fakeAdapter{name: session.HarnessClaudeCode, err: errors.New("a")})
+	reg.Register(&fakeAdapter{name: session.HarnessCodex, err: errors.New("b")})
+
+	_, err := reg.Resolve(t.Context(), "ffffff")
+	if err == nil {
+		t.Fatal("every adapter failing must error")
+	}
+	if len(hooked) != 2 {
+		t.Fatalf("each failing adapter must warn exactly once, got %v", hooked)
+	}
+}
+
+func TestResolveWarnsOnceWhenOtherAdaptersSucceed(t *testing.T) {
+	var hooked []string
+	reg := New(WithWarn(func(w string) { hooked = append(hooked, w) }))
+	reg.Register(&fakeAdapter{name: session.HarnessClaudeCode, metas: []session.Meta{
+		meta(session.HarnessClaudeCode, "abcdef01", 5),
+	}})
+	reg.Register(&fakeAdapter{name: session.HarnessOpenCode, err: errors.New("boom")})
+
+	_, err := reg.Resolve(t.Context(), "ffffff")
+	if !errors.Is(err, ErrNoSessions) {
+		t.Fatalf("want ErrNoSessions, got %v", err)
+	}
+	if len(hooked) != 1 || !strings.Contains(hooked[0], "opencode") {
+		t.Fatalf("the failing adapter must warn exactly once, got %v", hooked)
+	}
+}
+
+// TestResolveAttachesAdapterErrors verifies the fallback-mode seam: the
+// no-match error carries every per-adapter failure typed, so the CLI can
+// detect e.g. opencode.ErrFallbackNeedsID without string matching.
+func TestResolveAttachesAdapterErrors(t *testing.T) {
+	sentinel := errors.New("fallback needs id")
+	reg := New()
+	reg.Register(&fakeAdapter{name: session.HarnessClaudeCode, metas: []session.Meta{
+		meta(session.HarnessClaudeCode, "abcdef01", 5),
+	}})
+	reg.Register(&fakeAdapter{name: session.HarnessOpenCode, err: sentinel})
+
+	_, err := reg.Resolve(t.Context(), "zzzzzz")
+	if !errors.Is(err, ErrNoSessions) {
+		t.Fatalf("want ErrNoSessions, got %v", err)
+	}
+	var ae *AdapterError
+	if !errors.As(err, &ae) {
+		t.Fatalf("want an AdapterError inside %v", err)
+	}
+	if ae.Harness != session.HarnessOpenCode || !errors.Is(ae.Err, sentinel) {
+		t.Fatalf("AdapterError = %+v", ae)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("the sentinel must be reachable through the whole chain: %v", err)
+	}
+}
+
 func TestValidatePrefixAcceptsValid(t *testing.T) {
 	for _, p := range []string{"abcdef", "a-b_c-0", "session-id-with-dashes-123"} {
 		if err := ValidatePrefix(p); err != nil {

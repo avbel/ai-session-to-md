@@ -31,6 +31,20 @@ const (
 	maxRetryAfter   = time.Minute
 )
 
+// maxBodyRead caps how much of a response body is buffered: a hostile or
+// broken endpoint must not be able to exhaust memory. A var only so tests
+// can shrink it.
+var maxBodyRead = int64(16 << 20)
+
+// safeCheckRedirect stops redirects: a same-host 307/308 could resend the
+// Authorization header to a cleartext http:// target. Callers that pass
+// their own Options.HTTPClient must not use a redirect-following client;
+// New installs this default on any provided client whose CheckRedirect is
+// nil.
+func safeCheckRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 // retryableStatuses are the HTTP statuses a request is retried on.
 var retryableStatuses = map[int]bool{
 	http.StatusRequestTimeout:      true,
@@ -45,6 +59,13 @@ var retryableStatuses = map[int]bool{
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
+}
+
+// Message is one entry of a multi-message chat request. Role must be one of
+// the roles accepted by the OpenAI chat/completions API.
+type Message struct {
+	Role    string
+	Content string
 }
 
 // APIError is a non-2xx response. Body is the redacted, truncated response
@@ -105,7 +126,7 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if opts.APIKey == "" && !isLoopbackHost(base.Hostname()) {
+	if opts.APIKey == "" && !IsLoopbackHost(base.Hostname()) {
 		return nil, fmt.Errorf("%w: no API key: set the env var named by --api-key-env or use a loopback base URL", ErrUsage)
 	}
 	style, err := normalizeStyle(opts.ThinkingStyle)
@@ -134,7 +155,11 @@ func New(opts Options) (*Client, error) {
 		wait:       opts.Wait,
 	}
 	if c.httpClient == nil {
-		c.httpClient = &http.Client{}
+		c.httpClient = &http.Client{CheckRedirect: safeCheckRedirect}
+	} else if c.httpClient.CheckRedirect == nil {
+		// Keep a caller-provided client but stop it from following
+		// redirects, which could leak the Authorization header.
+		c.httpClient.CheckRedirect = safeCheckRedirect
 	}
 	if c.wait == nil {
 		c.wait = sleepWait
@@ -149,10 +174,30 @@ func (c *Client) Summarize(ctx context.Context, system, user string) (string, er
 	return text, err
 }
 
-// Complete sends one chat completion and returns the answer text plus the
-// usage reported by the server. Retries stay inside the caller's ctx.
+// Complete sends one chat completion with a system and a user message and
+// returns the answer text plus the usage reported by the server.
 func (c *Client) Complete(ctx context.Context, system, user string) (string, Usage, error) {
-	payload, err := c.buildBody(system, user)
+	return c.Chat(ctx, []Message{{Role: "system", Content: system}, {Role: "user", Content: user}})
+}
+
+// Chat sends a multi-message chat completion, preserving the message order,
+// and returns the answer text plus the usage reported by the server.
+// Retries stay inside the caller's ctx. Roles must be non-empty and one of
+// system, user, assistant, developer or tool; anything else is a usage
+// error.
+func (c *Client) Chat(ctx context.Context, msgs []Message) (string, Usage, error) {
+	if len(msgs) == 0 {
+		return "", Usage{}, fmt.Errorf("%w: chat needs at least one message", ErrUsage)
+	}
+	for i, m := range msgs {
+		if !validRoles[m.Role] {
+			return "", Usage{}, fmt.Errorf("%w: message %d has invalid role %q", ErrUsage, i, m.Role)
+		}
+		if strings.TrimSpace(m.Content) == "" {
+			return "", Usage{}, fmt.Errorf("%w: message %d (%s) has empty content", ErrUsage, i, m.Role)
+		}
+	}
+	payload, err := c.buildBody(msgs)
 	if err != nil {
 		return "", Usage{}, err
 	}
@@ -170,10 +215,19 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, Usa
 	}
 }
 
+// validRoles are the roles chat/completions accepts on the endpoint.
+var validRoles = map[string]bool{
+	"system":    true,
+	"user":      true,
+	"assistant": true,
+	"developer": true,
+	"tool":      true,
+}
+
 // attempt performs one HTTP request. retryable reports whether the failure
 // (when err != nil) should be retried; retryAfter is the server-provided wait.
 func (c *Client) attempt(ctx context.Context, payload []byte) (string, Usage, bool, time.Duration, error) {
-	resp, body, err := c.post(ctx, payload)
+	resp, body, truncated, err := c.post(ctx, payload)
 	if err != nil {
 		retryable := !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 		return "", Usage{}, retryable, 0, err
@@ -184,15 +238,18 @@ func (c *Client) attempt(ctx context.Context, payload []byte) (string, Usage, bo
 	}
 	content, usage, err := c.parseResponse(body)
 	if err != nil {
+		if truncated {
+			err = fmt.Errorf("%w (response body truncated at %d bytes)", err, maxBodyRead)
+		}
 		return "", Usage{}, false, 0, err
 	}
 	return content, usage, false, 0, nil
 }
 
-func (c *Client) post(ctx context.Context, payload []byte) (*http.Response, []byte, error) {
+func (c *Client) post(ctx context.Context, payload []byte) (*http.Response, []byte, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(payload))
 	if err != nil {
-		return nil, nil, fmt.Errorf("llm: build request: %w", err)
+		return nil, nil, false, fmt.Errorf("llm: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgentPrefix+c.version)
@@ -201,14 +258,21 @@ func (c *Client) post(ctx context.Context, payload []byte) (*http.Response, []by
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("llm: request: %w", err)
+		return nil, nil, false, fmt.Errorf("llm: request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, fmt.Errorf("llm: read response: %w", err)
+	// Bound the read: a hostile or broken endpoint must not be able to
+	// make us buffer an unbounded response.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyRead+1))
+	truncated := false
+	if err == nil && int64(len(body)) > maxBodyRead {
+		truncated = true
+		body = body[:maxBodyRead]
 	}
-	return resp, body, nil
+	if err != nil {
+		return nil, nil, truncated, fmt.Errorf("llm: read response: %w", err)
+	}
+	return resp, body, truncated, nil
 }
 
 func (c *Client) endpoint() string {
@@ -219,10 +283,14 @@ func (c *Client) endpoint() string {
 
 // buildBody assembles the chat/completions request body: fixed fields, then
 // thinking fields, then the user's extra body merged in last so it wins.
-func (c *Client) buildBody(system, user string) ([]byte, error) {
+func (c *Client) buildBody(msgs []Message) ([]byte, error) {
+	chat := make([]chatMessage, len(msgs))
+	for i, m := range msgs {
+		chat[i] = chatMessage(m)
+	}
 	body := map[string]any{
 		"model":    c.model,
-		"messages": []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		"messages": chat,
 		"stream":   false,
 	}
 	if c.maxTokens > 0 {
@@ -323,7 +391,7 @@ func validateBaseURL(raw string) (*url.URL, error) {
 	switch u.Scheme {
 	case "https":
 	case "http":
-		if !isLoopbackHost(u.Hostname()) {
+		if !IsLoopbackHost(u.Hostname()) {
 			return nil, fmt.Errorf("%w: base URL %q is http:// but the host is not loopback; the API key would be sent in cleartext", ErrUsage, raw)
 		}
 	default:
@@ -332,15 +400,23 @@ func validateBaseURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// isLoopbackHost reports whether the host is localhost, 127.x or ::1.
-func isLoopbackHost(host string) bool {
+// IsLoopbackHost reports whether the host is loopback: "localhost"
+// (case-insensitive), or an IP literal (IPv4 or bracketed/zoned IPv6) whose
+// loopback bit is set. Domain-suffix spoofs like "127.0.0.1.attacker.tld"
+// are rejected: only an exact name or a parsed IP counts.
+func IsLoopbackHost(host string) bool {
 	if host == "" {
 		return false
 	}
-	if strings.EqualFold(host, "localhost") || strings.HasPrefix(host, "127.") || host == "::1" {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
+	h := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	// IPv6 zone, as in "fe80::1%en0" or url-escaped "%25".
+	if i := strings.IndexByte(h, '%'); i >= 0 {
+		h = h[:i]
+	}
+	if ip := net.ParseIP(h); ip != nil {
 		return ip.IsLoopback()
 	}
 	return false

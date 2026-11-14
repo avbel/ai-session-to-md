@@ -1,8 +1,12 @@
 package codex
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/avbel/ai-session-to-md/internal/harness"
@@ -66,6 +70,65 @@ func TestListDropsUnloadableAndLogs(t *testing.T) {
 	})
 	if !found {
 		t.Fatalf("verbose log for %s not recorded; logs = %v", idMiss, logs)
+	}
+}
+
+// TestStatCandidateRejectsNonRegular reproduces the crafted-database finding:
+// a rollout_path pointing at a FIFO (or any non-regular file) must be
+// refused, or the reader would hang or OOM on it.
+func TestStatCandidateRejectsNonRegular(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mkfifo is unavailable on windows")
+	}
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "rollout-evil.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("mkfifo not available: %v", err)
+	}
+	a := New(dir)
+	if got := a.statCandidate(fifo); got != "" {
+		t.Fatalf("FIFO must be refused, got %q", got)
+	}
+	regular := filepath.Join(dir, "rollout-good.jsonl")
+	if err := os.WriteFile(regular, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.statCandidate(regular); got != regular {
+		t.Fatalf("regular file must pass, got %q", got)
+	}
+	if got := a.statCandidate(dir); got != "" {
+		t.Fatalf("directory must be refused, got %q", got)
+	}
+}
+
+// TestResolveRolloutPrefersRerooted verifies the security order: when both
+// the stored absolute path and the re-rooted path exist, the one under the
+// codex dir wins, so a crafted store cannot redirect reads elsewhere.
+func TestResolveRolloutPrefersRerooted(t *testing.T) {
+	dir := t.TempDir()
+	id := "rerootpref-x"
+	if err := os.MkdirAll(filepath.Join(dir, "sessions", "2026", "01", "02"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rerooted := filepath.Join(dir, "sessions", "2026", "01", "02",
+		"rollout-2026-01-02T10-00-00-"+id+".jsonl")
+	if err := os.WriteFile(rerooted, []byte("re-rooted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A stored path with the sessions marker that also exists on disk.
+	other := t.TempDir()
+	stored := filepath.Join(other, "sessions", "2026", "01", "02",
+		"rollout-2026-01-02T10-00-00-"+id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(stored), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stored, []byte("stored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(dir)
+	if got := a.resolveRollout(stored, id); got != rerooted {
+		t.Fatalf("resolveRollout = %q, want the re-rooted %q", got, rerooted)
 	}
 }
 

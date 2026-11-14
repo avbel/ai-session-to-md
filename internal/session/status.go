@@ -57,8 +57,19 @@ func Derive(s Session, info Info) Status {
 	}
 
 	start := lastMarkerIdx(s.Turns)
-	if call, ok := pendingCall(s.Turns, start); ok && !isQuestionTool(call.ToolName) {
-		st.Text = "stopped during tool call " + call.ToolName
+	open := openCalls(s.Turns, start)
+	if len(open) > 0 {
+		if call, ok := lastNonQuestion(open); ok {
+			st.Text = "stopped during tool call " + call.ToolName
+			st.PendingToolName = call.ToolName
+			st.PendingToolInput = truncate(call.Input, maxPendingInput)
+			return st
+		}
+		// Every open call is a question tool: the assistant asked and
+		// nothing has answered yet, whatever the mid-turn/finish signals
+		// say. PendingTool names the question the user must answer.
+		call := open[len(open)-1]
+		st.Text = "waiting for user answer"
 		st.PendingToolName = call.ToolName
 		st.PendingToolInput = truncate(call.Input, maxPendingInput)
 		return st
@@ -81,10 +92,13 @@ func Derive(s Session, info Info) Status {
 		return st
 	}
 
-	if pendingQuestion(s.Turns) {
-		if call, ok := lastToolCall(s.Turns); ok {
-			st.PendingToolName = call.ToolName
-			st.PendingToolInput = truncate(call.Input, maxPendingInput)
+	if branch, qcall := pendingQuestion(s.Turns); branch != questionNone {
+		// Only the question-tool branch carries a pending tool: the
+		// trailing-question branch belongs to an already finished tool
+		// exchange, so PendingTool stays empty there.
+		if branch == questionCall {
+			st.PendingToolName = qcall.ToolName
+			st.PendingToolInput = truncate(qcall.Input, maxPendingInput)
 		}
 		st.Text = "waiting for user answer"
 		return st
@@ -119,10 +133,10 @@ func lastMarkerIdx(turns []Turn) int {
 	return -1
 }
 
-// pendingCall returns the last ToolCall after start that has no matching
+// openCalls returns the tool calls after start that have no matching
 // ToolResult. Calls before start are orphans left by earlier interruptions
 // and are ignored.
-func pendingCall(turns []Turn, start int) (Turn, bool) {
+func openCalls(turns []Turn, start int) []Turn {
 	var open []Turn
 	for i := start + 1; i < len(turns); i++ {
 		switch turns[i].Kind {
@@ -137,10 +151,18 @@ func pendingCall(turns []Turn, start int) (Turn, bool) {
 			}
 		}
 	}
-	if len(open) == 0 {
-		return Turn{}, false
+	return open
+}
+
+// lastNonQuestion returns the most recent open call that is not a question
+// tool: a dangling question is an answer request, not work in progress.
+func lastNonQuestion(open []Turn) (Turn, bool) {
+	for _, t := range slices.Backward(open) {
+		if !isQuestionTool(t.ToolName) {
+			return t, true
+		}
 	}
-	return open[len(open)-1], true
+	return Turn{}, false
 }
 
 func lastToolCall(turns []Turn) (Turn, bool) {
@@ -196,17 +218,31 @@ func isQuestionTool(name string) bool {
 	return ok
 }
 
-// pendingQuestion reports an open question: a question tool call that nothing
-// has followed (no result, no reply, no further work), or a trailing
+// questionBranch distinguishes the two ways a session can end on an open
+// question: an unanswered question tool call, or a trailing assistant
+// question the user has not reacted to. Only the first carries a pending
+// tool.
+type questionBranch int
+
+const (
+	questionNone questionBranch = iota
+	questionCall
+	questionTrailing
+)
+
+// pendingQuestion reports an open question: a question tool call that
+// nothing has followed (no result, no reply, no further work), or a trailing
 // assistant question the user has not reacted to.
-func pendingQuestion(turns []Turn) bool {
+func pendingQuestion(turns []Turn) (questionBranch, Turn) {
 	if call, ok := lastToolCall(turns); ok && isQuestionTool(call.ToolName) && quietAfter(turns) {
-		return true
+		return questionCall, call
 	}
 	if st := lastTurnText(turns, AssistantText); st != "" && strings.HasSuffix(strings.TrimRight(st, " \t\n"), questionSuffix) {
-		return quietAfterAssistant(turns)
+		if quietAfterAssistant(turns) {
+			return questionTrailing, Turn{}
+		}
 	}
-	return false
+	return questionNone, Turn{}
 }
 
 // quietAfter reports that after the last question tool call nothing happened:

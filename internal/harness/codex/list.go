@@ -36,17 +36,22 @@ type threadRow struct {
 	archived     bool
 }
 
-// listed pairs a Meta with the harness-recorded origin URL, needed for the
-// origin half of the scope rule; it is dropped once filtering is done.
+// listed pairs a Meta with the fields List needs after the DB pass: the
+// harness-recorded origin URL for the scope rule and the thread's stored
+// rollout path, resolved only for rows that survive filtering and ordering.
 type listed struct {
-	meta   session.Meta
-	origin string
+	meta        session.Meta
+	origin      string
+	rolloutPath string
+	resolve     bool
 }
 
 // List returns the sessions, newest first, already filtered by scope and
 // (unless included) without archived ones. Primary source is the newest
 // state_*.sqlite; without a usable database it falls back to walking the
-// rollout files.
+// rollout files. Rollout files are resolved after the scope, archived and
+// limit filters have cut the candidate rows, so a store with many missing
+// rollouts costs one stat round per surviving row, not per thread in the DB.
 func (a *Adapter) List(ctx context.Context, opt harness.ListOptions) ([]session.Meta, error) {
 	lst, ok := a.listFromDB(ctx, opt)
 	if !ok {
@@ -68,13 +73,19 @@ func (a *Adapter) List(ctx context.Context, opt harness.ListOptions) ([]session.
 		}
 		return lst[i].meta.ID < lst[j].meta.ID
 	})
-	if opt.Limit > 0 && len(lst) > opt.Limit {
-		lst = lst[:opt.Limit]
-	}
 
-	out := make([]session.Meta, len(lst))
-	for i, l := range lst {
-		out[i] = l.meta
+	out := make([]session.Meta, 0, len(lst))
+	for _, l := range lst {
+		if l.resolve {
+			if p := a.resolveRollout(l.rolloutPath, l.meta.ID); p == "" {
+				a.log("drop codex thread %s: rollout file not found (stored %q)", l.meta.ID, l.rolloutPath)
+				continue
+			}
+		}
+		out = append(out, l.meta)
+		if opt.Limit > 0 && len(out) >= opt.Limit {
+			break
+		}
 	}
 	return out, nil
 }
@@ -191,8 +202,9 @@ func coalesceMs(ms, secs sql.NullInt64) int64 {
 	}
 }
 
-// buildMetas filters raw rows (subagents, spawn children, unloadable
-// rollouts) and turns the rest into listed metas.
+// buildMetas filters raw rows (subagents, spawn children) and turns the
+// rest into listed metas whose rollout files List resolves later, after
+// scope, archived and limit filtering have cut the candidates.
 func (a *Adapter) buildMetas(ctx context.Context, dbPath string, rows []threadRow) []listed {
 	spawned := childThreadIDs(ctx, dbPath, a.log)
 	names := loadThreadNames(a.dir)
@@ -207,14 +219,11 @@ func (a *Adapter) buildMetas(ctx context.Context, dbPath string, rows []threadRo
 			a.log("drop codex thread %s: spawned child thread", r.id)
 			continue
 		}
-		rollout := a.resolveRollout(r.rolloutPath, r.id)
-		if rollout == "" {
-			a.log("drop codex thread %s: rollout file not found (stored %q)", r.id, r.rolloutPath)
-			continue
-		}
 		out = append(out, listed{
-			meta:   a.metaFromRow(dbPath, r, names),
-			origin: r.originURL,
+			meta:        a.metaFromRow(dbPath, r, names),
+			origin:      r.originURL,
+			rolloutPath: r.rolloutPath,
+			resolve:     true,
 		})
 	}
 	return out
@@ -255,23 +264,17 @@ func (a *Adapter) metaFromRow(dbPath string, r threadRow, names map[string]strin
 }
 
 // threadTitle picks name, then the session_index thread_name, then the
-// first line of the title column, truncated to 80 runes.
+// first line of the title column. The full value is kept: display cleanup
+// and truncation happen in the CLI via handoff.CleanTitle, never at list
+// time, so redaction can match secrets that straddle any cut.
 func threadTitle(r threadRow, names map[string]string) string {
 	switch {
 	case r.name != "":
-		return truncateRunes(r.name, 80)
+		return r.name
 	case names[r.id] != "":
-		return truncateRunes(names[r.id], 80)
+		return names[r.id]
 	default:
 		first, _, _ := strings.Cut(r.title, "\n")
-		return truncateRunes(strings.TrimSpace(first), 80)
+		return strings.TrimSpace(first)
 	}
-}
-
-func truncateRunes(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
 }

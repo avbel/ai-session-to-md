@@ -223,6 +223,8 @@ func (mi *metaInfo) countUser(ln line) {
 }
 
 // title applies the precedence: custom, ai, last prompt, first user text.
+// The full value is kept: display truncation happens in the CLI via
+// handoff.CleanTitle, never at list time.
 func (mi *metaInfo) title() string {
 	switch {
 	case mi.custom != "":
@@ -232,16 +234,8 @@ func (mi *metaInfo) title() string {
 	case mi.lastPrompt != "":
 		return mi.lastPrompt
 	default:
-		return truncateRunes(mi.firstUser, 80)
+		return mi.firstUser
 	}
-}
-
-func truncateRunes(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
 }
 
 // inScope reports that the session cwd equals the scope root or lives under

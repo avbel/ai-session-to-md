@@ -102,6 +102,62 @@ func TestBuiltinPatterns(t *testing.T) {
 			neg:  "postgres://db.example.com:5432/app",
 		},
 		{
+			name: "url_credential_empty_username",
+			kind: "url_credential",
+			pos:  "redis://" + ":" + "hunter2" + "@cache.example.com:6379/0",
+			want: "redis://[REDACTED]@cache.example.com:6379/0",
+			neg:  "redis://cache.example.com:6379/0",
+		},
+		{
+			name: "url_credential_slash_password",
+			kind: "url_credential",
+			pos:  "postgres://u:pa" + "/ss" + "@h.example.com/db",
+			want: "postgres://[REDACTED]@h.example.com/db",
+			neg:  "see https://example.com/docs/page.html for details",
+		},
+		{
+			name: "url_credential_at_password",
+			kind: "url_credential",
+			pos:  "postgres://u:pa" + "@ss" + "@h.example.com/db",
+			want: "postgres://[REDACTED]@h.example.com/db",
+			neg:  "clone git@github.com:avbel/demo.git",
+		},
+		{
+			name: "url_credential_uppercase_scheme",
+			kind: "url_credential",
+			pos:  "POSTGRES://" + "user" + ":" + "secret1" + "@db.example.com/app",
+			want: "POSTGRES://[REDACTED]@db.example.com/app",
+			neg:  "POSTGRES://db.example.com/app",
+		},
+		{
+			name: "basic_auth",
+			kind: "basic_auth",
+			pos:  "Authorization: Basic " + "dXNlcjpw" + "YXNzMTE" + "=",
+			want: "Authorization: Basic [REDACTED]",
+			neg:  "authorization: basic abc",
+		},
+		{
+			name: "basic_auth_json",
+			kind: "basic_auth",
+			pos:  `{\"authorization\":\"Basic ` + "dXNlcjpw" + "YXNzMTE" + `\"}`,
+			want: `Basic [REDACTED]`,
+			neg:  `{\"authorization\":\"Basic\"}`,
+		},
+		{
+			name: "curl_user",
+			kind: "curl_user",
+			pos:  "curl -u admin:" + "hunter2" + " https://api.example.com",
+			want: "curl -u [REDACTED] https://api.example.com",
+			neg:  "sort -u names.txt",
+		},
+		{
+			name: "curl_user_quoted",
+			kind: "curl_user",
+			pos:  `curl --user 'admin:` + "hunter2" + `'`,
+			want: "curl --user [REDACTED]",
+			neg:  "curl --user",
+		},
+		{
 			name: "bearer",
 			kind: "bearer",
 			pos:  "Authorization: Bearer " + strings.Repeat("t0k", 6),
@@ -121,6 +177,50 @@ func TestBuiltinPatterns(t *testing.T) {
 			pos:  `"api_key": "value1234567"`,
 			want: `"api_key: [REDACTED]`,
 			neg:  `"api_key": "abc"`,
+		},
+		{
+			name: "assignment_json_compact",
+			kind: "assignment",
+			pos:  `{\"password\":\"hunter2\"}`,
+			want: `{\"password:[REDACTED]}`,
+			neg:  `{\"password\":\"ab\"}`,
+		},
+		{
+			name: "assignment_quoted_spaces",
+			kind: "assignment",
+			pos:  `password: "correct horse battery staple"`,
+			want: `password: [REDACTED]`,
+			neg:  `password: "a b"`,
+		},
+		{
+			name: "assignment_api_key_dashed",
+			kind: "assignment",
+			pos:  `"x-api-key": "abcdefgh12345678"`,
+			want: `"x-api-key: [REDACTED]`,
+			neg:  `"x-api-key": "abc"`,
+		},
+		{
+			name: "pem_key_truncated",
+			kind: "pem_key",
+			pos: "-----BEGIN " + "OPENSSH PRIVATE KEY" + "-----\n" +
+				strings.Repeat("b3Bh", 40),
+			want: "[REDACTED:pem_key]",
+			neg:  "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----",
+		},
+		{
+			name: "pgp_key_block",
+			kind: "pem_key",
+			pos: "-----BEGIN " + "PGP PRIVATE KEY BLOCK" + "-----\n" +
+				strings.Repeat("lQ0Y", 20) + "\n-----END " + "PGP PRIVATE KEY BLOCK" + "-----",
+			want: "[REDACTED:pem_key]",
+			neg:  "-----BEGIN PGP SIGNATURE-----\nabc\n-----END PGP SIGNATURE-----",
+		},
+		{
+			name: "pgp_key_truncated",
+			kind: "pem_key",
+			pos:  "-----BEGIN " + "PGP PRIVATE KEY BLOCK" + "-----\n" + strings.Repeat("lQ0Y", 20),
+			want: "[REDACTED:pem_key]",
+			neg:  "-----BEGIN PGP MESSAGE-----\nabc\n-----END PGP MESSAGE-----",
 		},
 		{
 			name: "gitlab_token",
@@ -215,6 +315,43 @@ func TestHomeDirReplaced(t *testing.T) {
 	}
 	if got.Counts["home"] != 2 {
 		t.Errorf("counts[home] = %d, want 2", got.Counts["home"])
+	}
+}
+
+func TestHomeDirPathBoundary(t *testing.T) {
+	t.Setenv("HOME", "/Users/al")
+	r := newTestRedactor(t)
+	got := r.Apply("/Users/alice visits /Users/al/x, /Users/al end and /Users/al.txt")
+	want := "/Users/alice visits ~/x, ~ end and /Users/al.txt"
+	if got.Text != want {
+		t.Errorf("got %q, want %q", got.Text, want)
+	}
+}
+
+func TestTotalExcludesHome(t *testing.T) {
+	t.Setenv("HOME", "/Users/al")
+	r := newTestRedactor(t)
+	got := r.Apply("/Users/al/a and /Users/al/b")
+	if got.Counts["home"] != 2 {
+		t.Errorf("counts[home] = %d, want 2", got.Counts["home"])
+	}
+	if got.Total() != 0 {
+		t.Errorf("Total = %d, want 0: folding a path is not a secret", got.Total())
+	}
+}
+
+func TestHomeRootSkipped(t *testing.T) {
+	// HOME=/ must not be applied: every "/" would fold to "~" and no URL
+	// rule could ever match again (the Slack webhook would leak).
+	t.Setenv("HOME", "/")
+	r := newTestRedactor(t)
+	in := "webhook https://hooks." + "slack.com/services/" + "T00/B00/x1y2z3"
+	got := r.Apply(in)
+	if !strings.Contains(got.Text, "[REDACTED:webhook_url]") {
+		t.Errorf("got %q, want the webhook redacted even with HOME=/", got.Text)
+	}
+	if strings.ContainsRune(got.Text, '~') {
+		t.Errorf("got %q, want no fold with HOME=/", got.Text)
 	}
 }
 

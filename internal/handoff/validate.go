@@ -1,6 +1,8 @@
 package handoff
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,6 +14,15 @@ const (
 	warnWords    = 1200
 	rerollWords  = 2400
 )
+
+// ErrRerollCancelled marks that the Reroll callback stopped because its
+// context was cancelled (Ctrl-C) rather than because the LLM call failed.
+// Validate surfaces it in ValidationResult.Err instead of swallowing it into
+// the warnings list. The CLI detects it with errors.Is(result.Err,
+// ErrRerollCancelled) and should exit 130 for context.Canceled (a
+// DeadlineExceeded from the per-request LLM timeout stays visible inside the
+// wrapped error, so the CLI can still map it to a runtime exit).
+var ErrRerollCancelled = errors.New("summary re-roll cancelled")
 
 var requiredHeadings = []string{
 	"### Goal",
@@ -44,11 +55,15 @@ type ValidateOptions struct {
 // when a re-roll was needed but no Reroll func was given; it feeds
 // RerollMessage. After a performed re-roll, every still-failed check —
 // including those that triggered the re-roll — is reported as a warning.
+// Err is set only when the re-roll stopped because its context was cancelled
+// (see ErrRerollCancelled); it never carries ordinary LLM failures, which
+// stay warnings so a broken answer is still accepted with diagnostics.
 type ValidationResult struct {
 	Clean    string
 	Warnings []string
 	ReRolled bool
 	Missing  []string
+	Err      error
 }
 
 type checkFailure struct {
@@ -81,6 +96,10 @@ func Validate(output string, opts ValidateOptions) ValidationResult {
 	res.ReRolled = true
 	again, err := opts.Reroll(missingKeys(fails))
 	if err != nil {
+		if isCancel(err) {
+			res.Err = fmt.Errorf("%w: %w", ErrRerollCancelled, err)
+			return res
+		}
 		res.Warnings = append(res.Warnings, "re-roll request failed: "+err.Error())
 		return res
 	}
@@ -91,6 +110,12 @@ func Validate(output string, opts ValidateOptions) ValidationResult {
 		res.Warnings = append(res.Warnings, f.message)
 	}
 	return res
+}
+
+// isCancel reports whether err is a context cancellation or deadline
+// overrun, which the Reroll callback may return wrapped in its own error.
+func isCancel(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func missingKeys(fails []checkFailure) []string {
@@ -167,7 +192,7 @@ func scanOutput(clean string) scanOutputResult {
 				s.tldrIdxs = append(s.tldrIdxs, i)
 				s.tldrTexts = append(s.tldrTexts, strings.TrimSpace(strings.TrimPrefix(t, "TL;DR:")))
 			}
-			if strings.HasPrefix(t, "#") {
+			if isMarkdownHeading(t) {
 				s.headings = append(s.headings, heading{i, t})
 				wantBody = t == "### Next steps"
 				if wantBody {
@@ -182,6 +207,17 @@ func scanOutput(clean string) scanOutputResult {
 		}
 	}
 	return s
+}
+
+// isMarkdownHeading matches only ATX headings of level 1–3: one to three '#'
+// followed by a space. "#123" issue references and "#### x" notes are plain
+// text, not headings, and must not trigger a re-roll.
+func isMarkdownHeading(t string) bool {
+	n := 0
+	for n < len(t) && t[n] == '#' {
+		n++
+	}
+	return n >= 1 && n <= 3 && n < len(t) && t[n] == ' '
 }
 
 // stripOuterFence removes one code fence that wraps the whole answer. The

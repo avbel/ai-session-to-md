@@ -110,7 +110,11 @@ func TestStripCredentials(t *testing.T) {
 		{"https://user:@github.com/x/y.git", "https://github.com/x/y.git"},
 		{"https://github.com/x/y.git", "https://github.com/x/y.git"},
 		{"git@github.com:x/y.git", "git@github.com:x/y.git"},
-		{"ssh://user@host/x", "ssh://user@host/x"},
+		{"ssh://user@host/x", "ssh://host/x"},
+		{"https://" + "a1b2c3d4e5f6a1b2c3d4" + "a1b2c3d4e5f6a1b2c3d4" + "@host/x", "https://host/x"},
+		{"https://u:pa" + "@ss" + "@h/x", "https://h/x"},
+		{"https://u:pa" + "/ss" + "@h/x", "https://h/x"},
+		{"ssh://git@host:2222/x/y.git", "ssh://host:2222/x/y.git"},
 		{"", ""},
 	}
 	for _, tc := range cases {

@@ -130,15 +130,6 @@ func gitOne(ctx context.Context, dir string, args ...string) (string, bool) {
 	return s, s != ""
 }
 
-func openCodeAdapter(ads []harness.Adapter) *opencode.Adapter {
-	for _, ad := range ads {
-		if a, ok := ad.(*opencode.Adapter); ok {
-			return a
-		}
-	}
-	return nil
-}
-
 // loadSession loads the selected session with the harness-specific end
 // signals: OpenCode via LoadDetailed, Codex via its StatusInfo hook, Claude
 // Code with zero Info.
@@ -180,8 +171,9 @@ type output struct {
 }
 
 // outputPlan resolves -o (or the default file name), checks the overwrite
-// rules and asks for confirmation when needed.
-func (a *app) outputPlan(ctx context.Context, u *ui.UI, flags *cli.Flags, h session.Harness) (output, error) {
+// rules and asks for confirmation when needed. meta feeds the confirm's
+// description line.
+func (a *app) outputPlan(ctx context.Context, u *ui.UI, flags *cli.Flags, meta session.Meta) (output, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return output{}, fmt.Errorf("get working directory: %w", err)
@@ -191,9 +183,9 @@ func (a *app) outputPlan(ctx context.Context, u *ui.UI, flags *cli.Flags, h sess
 	}
 	p := flags.Output
 	if p == "" {
-		name, ok := handoff.OutputFileName(h)
+		name, ok := handoff.OutputFileName(meta.Harness)
 		if !ok {
-			return output{}, fmt.Errorf("no output file name for harness %q", h)
+			return output{}, fmt.Errorf("no output file name for harness %q", meta.Harness)
 		}
 		p = filepath.Join(cwd, name)
 	}
@@ -202,7 +194,7 @@ func (a *app) outputPlan(ctx context.Context, u *ui.UI, flags *cli.Flags, h sess
 		abs = filepath.Join(cwd, p)
 	}
 	dir := filepath.Dir(abs)
-	if err := a.overwriteCheck(ctx, u, flags, abs); err != nil {
+	if err := a.overwriteCheck(ctx, u, flags, abs, meta); err != nil {
 		return output{}, err
 	}
 	disp := p
@@ -214,7 +206,7 @@ func (a *app) outputPlan(ctx context.Context, u *ui.UI, flags *cli.Flags, h sess
 
 // overwriteCheck applies the pure decision rules and, on a TTY, the confirm
 // prompt for an existing file.
-func (a *app) overwriteCheck(ctx context.Context, u *ui.UI, flags *cli.Flags, abs string) error {
+func (a *app) overwriteCheck(ctx context.Context, u *ui.UI, flags *cli.Flags, abs string, meta session.Meta) error {
 	state := cli.OverwriteAbsent
 	if info, err := os.Lstat(abs); err == nil { //nolint:gosec // G703: the output path is the user's own CLI argument, by design
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -223,17 +215,36 @@ func (a *app) overwriteCheck(ctx context.Context, u *ui.UI, flags *cli.Flags, ab
 			state = cli.OverwriteExists
 		}
 	}
-	if err := cli.OverwriteDecision(state, flags.Force, u.InTTY); err != nil {
-		return err
+	if state == cli.OverwriteSymlink {
+		return &hintError{
+			msg:   fmt.Sprintf("refusing to write %s: the output path is a symlink", abs),
+			hint:  "remove the symlink or choose another path with -o",
+			cause: cli.ErrUsage,
+		}
 	}
 	if state == cli.OverwriteExists && !flags.Force {
-		ok, err := u.Confirm(ctx, "Overwrite "+abs+"?")
+		// The confirm needs both terminals: stdin to answer, stderr to draw.
+		if !u.InTTY || !u.ErrTTY {
+			return &hintError{
+				msg:   abs + " already exists; pass --force to overwrite (no TTY to confirm)",
+				hint:  "check the file first — the new handoff replaces it",
+				cause: cli.ErrUsage,
+			}
+		}
+		ok, err := u.Confirm(ctx, "Overwrite "+filepath.Base(abs)+"?", overwriteDesc(meta))
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("not overwritten: %w", ui.ErrCancelled)
+			return fmt.Errorf("kept %s; use -o PATH or --force: %w", filepath.Base(abs), ui.ErrCancelled)
 		}
 	}
 	return nil
+}
+
+// overwriteDesc is the confirm's description: which session, how old, and
+// what happens to its chain.
+func overwriteDesc(meta session.Meta) string {
+	age := ui.FormatAge(meta.UpdatedAt, time.Now())
+	return fmt.Sprintf("session %s · updated %s · its history is carried into the new file", meta.ID, age)
 }

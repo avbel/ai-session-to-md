@@ -45,9 +45,13 @@ type Previous struct {
 // Selection is the outcome of scanning the output dir: the newest valid
 // other-session file (Prev) and, when present, the file of the session being
 // handed off (SameSession), which is never appended as a hop of its own.
+// currentID is the session the selection was built for; NewHistory uses it to
+// drop stale entries for the current session.
 type Selection struct {
 	Prev        *Previous
 	SameSession *Previous
+
+	currentID string
 }
 
 // LogFunc receives --verbose diagnostics about ignored candidates.
@@ -69,6 +73,7 @@ func Select(outputDir, currentSessionID string, log LogFunc) (Selection, error) 
 	defer func() { _ = root.Close() }()
 
 	var sel Selection
+	sel.currentID = currentSessionID
 	for _, name := range candidateFiles {
 		prev, err := readCandidate(root, name)
 		if err != nil {
@@ -124,15 +129,26 @@ func newer(cand, cur *Previous) bool {
 
 // NewHistory builds the history rows for the next file: the same-session
 // file's history (inheriting earlier hops of a re-run), then the previous
-// file's history, then one entry for the previous file itself. Entries dedupe
-// by (harness, session_id) keeping the first, and the last 20 are kept.
+// file's history, then one entry for the previous file itself. Entries for
+// the current session are dropped first — a re-run of B after A→B→C must not
+// keep C's copy of hop B next to the fresh B row appended at write time —
+// then entries dedupe by (harness, session_id) keeping the first, and the
+// last 20 are kept.
 func (sel Selection) NewHistory() []HistoryEntry {
 	var entries []HistoryEntry
+	add := func(list []HistoryEntry) {
+		for _, e := range list {
+			if sel.currentID != "" && e.SessionID == sel.currentID {
+				continue
+			}
+			entries = append(entries, e)
+		}
+	}
 	if sel.SameSession != nil {
-		entries = append(entries, sel.SameSession.Meta.History...)
+		add(sel.SameSession.Meta.History)
 	}
 	if sel.Prev != nil {
-		entries = append(entries, sel.Prev.Meta.History...)
+		add(sel.Prev.Meta.History)
 		entries = append(entries, HistoryEntry{
 			Harness:     sel.Prev.Meta.Harness,
 			SessionID:   sel.Prev.Meta.SessionID,
@@ -163,7 +179,10 @@ func capHistory(entries []HistoryEntry) []HistoryEntry {
 
 // ForLLM extracts what the summarizer sees from the previous file: its
 // Summary section (or the raw-transcript section) plus the history table,
-// at most maxPrevLLMChars chars. Injected reminders and HTML comments inside
+// at most maxPrevLLMChars chars. The real Summary is the one that starts the
+// file's own structure after the fixed sections, so extractSection matches
+// the LAST qualifying heading: a crafted or stray "## Summary" earlier in the
+// file cannot stand in for it. Injected reminders and HTML comments inside
 // verbatim quoted blocks are stripped. The result must still be redacted by
 // the wiring before it reaches the LLM; returns "" when there is no previous.
 func (sel Selection) ForLLM() string {
@@ -234,15 +253,30 @@ func sanitizeVerbatim(content string) string {
 	return b.String()
 }
 
-// extractSection returns the lines of the section starting at heading (a
-// "## " line matched exactly), up to the next "## " heading, heading included.
+// extractSection returns the body of the LAST section whose heading line
+// matches heading exactly ("## Summary" etc.). A match must be a bare heading
+// at column zero and outside any fenced block, so list-item content or
+// verbatim-quoted text cannot forge the section. The section ends at the next
+// column-zero "## " heading outside a fence, heading included.
 func extractSection(content, heading string) string {
 	lines := strings.Split(content, "\n")
 	start := -1
+	inFence, openRun := false, 0
 	for i, line := range lines {
-		if strings.TrimRight(line, " \t") == heading {
+		t := strings.TrimSpace(line)
+		run := backtickRun(t)
+		if !inFence && run >= 3 {
+			inFence, openRun = true, run
+			continue
+		}
+		if inFence {
+			if run == openRun {
+				inFence = false
+			}
+			continue
+		}
+		if line == heading {
 			start = i
-			break
 		}
 	}
 	if start < 0 {
@@ -250,7 +284,15 @@ func extractSection(content, heading string) string {
 	}
 	var b strings.Builder
 	for i := start; i < len(lines); i++ {
-		if i > start && strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
+		t := strings.TrimSpace(lines[i])
+		run := backtickRun(t)
+		if !inFence && run >= 3 {
+			inFence, openRun = true, run
+		} else if inFence {
+			if run == openRun {
+				inFence = false
+			}
+		} else if i > start && strings.HasPrefix(lines[i], "## ") {
 			break
 		}
 		b.WriteString(lines[i])

@@ -39,7 +39,7 @@ func TestClaudeCodeLatest(t *testing.T) {
 	mustContain(t, doc, "  - [ ] **in progress:** fix the failing test", "in-progress todo")
 	mustContain(t, doc, "  - [ ] rerun go test", "pending todo")
 	mustContain(t, doc, dirtyWarning, "dirty-tree warning")
-	mustContain(t, doc, "1 commits not pushed.", "unpushed warning")
+	mustContain(t, doc, "branch main has no upstream; 1 commits exist only here", "unpushed warning")
 	mustContain(t, doc, "- Ahead/behind upstream: no upstream", "upstream line")
 	mustContain(t, doc, "- Files touched in session: `"+filepath.Join("pkg", "reduce", "reduce.go")+"`", "files touched")
 	mustContain(t, doc, "TL;DR: Fix the reduce test in pkg/reduce", "summary TL;DR")

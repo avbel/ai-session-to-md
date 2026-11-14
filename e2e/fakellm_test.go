@@ -92,7 +92,9 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch f.mode {
 	case llmBrokenFirst:
-		if n == 1 {
+		// The first request of every run gets the broken answer, so a
+		// --verbose re-run can still re-roll.
+		if n%2 == 1 {
 			writeChatResponse(w, brokenSummary)
 			return
 		}
@@ -185,6 +187,32 @@ func messageContent(t *testing.T, body map[string]any, role string) string {
 	}
 	t.Fatalf("request body has no %q message", role)
 	return ""
+}
+
+// chatMsg is one message of a recorded request body.
+type chatMsg struct {
+	Role    string
+	Content string
+}
+
+// allMessages returns every message of a request body in order.
+func allMessages(t *testing.T, body map[string]any) []chatMsg {
+	t.Helper()
+	rawMsgs, ok := body["messages"].([]any)
+	if !ok {
+		t.Fatalf("request body has no messages: %v", body)
+	}
+	out := make([]chatMsg, 0, len(rawMsgs))
+	for _, raw := range rawMsgs {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		content, _ := msg["content"].(string)
+		out = append(out, chatMsg{Role: role, Content: content})
+	}
+	return out
 }
 
 // previousHandoff extracts the <previous_handoff> block from a user message.

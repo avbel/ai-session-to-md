@@ -82,7 +82,7 @@ func deriveTitle(lines []line) string {
 		if !ln.IsSidechain && ln.Type == typeUser && !ln.IsMeta && !ln.IsCompactSummary {
 			for _, t := range userTurns(ln) {
 				if t.Kind == session.UserText {
-					return truncateRunes(t.Text, 80)
+					return t.Text
 				}
 			}
 		}

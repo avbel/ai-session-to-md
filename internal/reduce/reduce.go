@@ -15,17 +15,25 @@ import (
 // spinner and chunk numbering around each call.
 type Summarizer func(ctx context.Context, chunk string) (string, error)
 
+// Progress reports map-reduce progress: done is the 1-based index of the
+// chunk about to be summarized and total is the chunk count of that phase.
+type Progress func(done, total int, phase string)
+
 // Reducer renders a session transcript and shrinks it to fit the LLM input
 // budget (§11). The caller renders the <session_facts> block itself and only
 // reports sizes: the budget subtracts SystemPromptLen, FactsLen and PrevLen
 // as byte lengths. Raw runs steps 1–3 only — tail window, older-turn
 // truncation and the tail budget check — and never calls Summarizer.
+// OnChunk, when set, fires before each Summarizer call with phase "older"
+// while condensing the older history into notes, and phase "notes" while
+// re-summarizing notes that still overflow the budget.
 type Reducer struct {
 	MaxInputTokens  int
 	SystemPromptLen int
 	FactsLen        int
 	PrevLen         int
 	Summarizer      Summarizer
+	OnChunk         Progress
 	Raw             bool
 }
 
@@ -100,7 +108,7 @@ func (r Reducer) fitTail(turns []session.Turn) (limits, error) {
 func (r Reducer) condenseOlder(ctx context.Context, older []session.Turn, budget, tailTokens int) (string, error) {
 	blocks := slices.DeleteFunc(renderAll(older, olderLimits()), func(b string) bool { return b == "" })
 	chunkTokens := max(1, budget/2)
-	notes, err := r.summarizeChunks(ctx, chunkBlocks(blocks, chunkTokens))
+	notes, err := r.summarizeChunks(ctx, chunkBlocks(blocks, chunkTokens), "older")
 	if err != nil {
 		return "", fmt.Errorf("reduce: summarize older part: %w", err)
 	}
@@ -111,7 +119,7 @@ func (r Reducer) condenseOlder(ctx context.Context, older []session.Turn, budget
 		return notes, nil
 	}
 	for range maxNoteRounds {
-		notes, err = r.summarizeChunks(ctx, chunkBlocks([]string{notes}, chunkTokens))
+		notes, err = r.summarizeChunks(ctx, chunkBlocks([]string{notes}, chunkTokens), "notes")
 		if err != nil {
 			return "", fmt.Errorf("reduce: re-summarize notes: %w", err)
 		}
@@ -123,10 +131,13 @@ func (r Reducer) condenseOlder(ctx context.Context, older []session.Turn, budget
 }
 
 // summarizeChunks calls the Summarizer once per chunk, sequentially, and
-// joins the notes.
-func (r Reducer) summarizeChunks(ctx context.Context, chunks []string) (string, error) {
+// joins the notes. phase is reported through OnChunk before each call.
+func (r Reducer) summarizeChunks(ctx context.Context, chunks []string, phase string) (string, error) {
 	notes := make([]string, 0, len(chunks))
 	for i, chunk := range chunks {
+		if r.OnChunk != nil {
+			r.OnChunk(i+1, len(chunks), phase)
+		}
 		note, err := r.Summarizer(ctx, chunk)
 		if err != nil {
 			return "", fmt.Errorf("reduce: summarize chunk %d/%d: %w", i+1, len(chunks), err)

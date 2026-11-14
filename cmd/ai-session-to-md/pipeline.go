@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/avbel/ai-session-to-md/internal/cli"
@@ -24,11 +25,16 @@ import (
 	"github.com/avbel/ai-session-to-md/internal/ui"
 )
 
-// redactor wraps the secret redactor and counts every redaction for the
-// final status line.
+// homeKind is the redactor's kind name for home-path folding; folded paths
+// are not secrets, so they are excluded from the reported counts.
+const homeKind = "home"
+
+// redactor wraps the secret redactor and collects every redaction, by kind,
+// for the final status line.
 type redactor struct {
 	r     *redact.Redactor
-	total atomic.Int64
+	mu    sync.Mutex
+	kinds map[string]int
 }
 
 func newRedactor(patterns []string) (*redactor, error) {
@@ -36,13 +42,20 @@ func newRedactor(patterns []string) (*redactor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build redactor: %w", err)
 	}
-	return &redactor{r: r}, nil
+	return &redactor{r: r, kinds: map[string]int{}}, nil
 }
 
-// str redacts one string and counts the matches.
+// str redacts one string and collects the matches.
 func (rd *redactor) str(s string) string {
 	res := rd.r.Apply(s)
-	rd.total.Add(int64(res.Total()))
+	rd.mu.Lock()
+	for kind, n := range res.Counts {
+		if kind == homeKind {
+			continue
+		}
+		rd.kinds[kind] += n
+	}
+	rd.mu.Unlock()
 	return res.Text
 }
 
@@ -50,6 +63,33 @@ func (rd *redactor) str(s string) string {
 // client's error redaction.
 func (rd *redactor) fn() func(string) string {
 	return rd.str
+}
+
+// summary snapshots the collected counts for the final status line, kinds
+// ordered most frequent first.
+func (rd *redactor) summary() ui.Redactions {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	type kindCount struct {
+		kind string
+		n    int
+	}
+	var cs []kindCount
+	out := ui.Redactions{}
+	for kind, n := range rd.kinds {
+		out.Total += n
+		cs = append(cs, kindCount{kind, n})
+	}
+	slices.SortFunc(cs, func(a, b kindCount) int {
+		if a.n != b.n {
+			return b.n - a.n
+		}
+		return strings.Compare(a.kind, b.kind)
+	})
+	for _, c := range cs {
+		out.Kinds = append(out.Kinds, c.kind)
+	}
+	return out
 }
 
 // runHandoff drives load → git → redact → reduce → summarize → write.
@@ -60,7 +100,7 @@ func (a *app) runHandoff(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *c
 	if err != nil {
 		return err
 	}
-	out, err := a.outputPlan(ctx, u, flags, meta.Harness)
+	out, err := a.outputPlan(ctx, u, flags, meta)
 	if err != nil {
 		return err
 	}
@@ -69,10 +109,15 @@ func (a *app) runHandoff(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *c
 	if err != nil {
 		return err
 	}
-	git, err := a.gitWithSpinner(ctx, u, meta.Cwd, s.RecordedGit)
+	// gitinfo measures the session's own cwd (the last non-empty one on the
+	// transcript), never the redacted picker display copy.
+	git, err := a.gitWithSpinner(ctx, u, s.Cwd, recordedGit(s))
 	if err != nil {
 		return err
 	}
+	// Redact the git output once: the same values feed the facts JSON, the
+	// handoff's repository section and the warnings.
+	git = redactGit(rd, git)
 	sRed := redactWithSpinner(u, rd, s)
 	status := session.Derive(sRed, info)
 
@@ -87,9 +132,12 @@ func (a *app) runHandoff(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *c
 		return err
 	}
 
-	res, err := a.summarize(ctx, u, flags, cfg, rd, sRed, status, system, facts, prevText)
+	res, err := a.summarize(ctx, u, flags, cfg, rd, log, sRed, status, system, facts, prevText)
 	if err != nil {
 		return err
+	}
+	if res.ReRolled {
+		log("summary was re-rolled once")
 	}
 	doc, err := handoff.Build(handoff.BuildOptions{
 		Harness:      meta.Harness,
@@ -112,19 +160,20 @@ func (a *app) runHandoff(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *c
 		return err
 	}
 
-	disp, err := a.writeDoc(out, doc)
+	disp, err := a.writeDoc(u, out, doc)
 	if err != nil {
 		return err
 	}
-	u.Final(disp, len(doc.Content), res.Before, res.After, int(rd.total.Load()))
-	for _, w := range res.Warnings {
-		u.Warn(w)
-	}
+	u.Final(disp, len(doc.Content), res.Before, res.After, rd.summary())
+	// Warnings: git state first, then skipped lines, then summary quality.
 	for _, w := range git.Warnings {
 		u.Warn(w)
 	}
 	if sRed.Skipped > 0 {
 		u.Warn(fmt.Sprintf("skipped %d unparseable lines", sRed.Skipped))
+	}
+	for _, w := range res.Warnings {
+		u.Warn(w)
 	}
 	return nil
 }
@@ -146,11 +195,16 @@ func (a *app) loadWithSpinner(ctx context.Context, u *ui.UI, ads []harness.Adapt
 func (a *app) gitWithSpinner(ctx context.Context, u *ui.UI, cwd string, rec session.GitRecord) (gitinfo.Result, error) {
 	sp := u.Step("Collecting git state")
 	defer sp.Stop()
-	res, err := gitinfo.Info(ctx, cwd, rec)
-	if err != nil {
-		return gitinfo.Result{}, err
-	}
-	return res, nil
+	return gitinfo.Info(ctx, cwd, rec)
+}
+
+// recordedGit is the RecordedGit record gitinfo should fall back to. Branch
+// doubles as the session's recorded branch for the mismatch warning, taking
+// Meta.Branch when the record itself carries none (Claude Code).
+func recordedGit(s session.Session) session.GitRecord {
+	rec := s.RecordedGit
+	rec.Branch = cmp.Or(rec.Branch, s.Branch)
+	return rec
 }
 
 // redactWithSpinner applies redaction to everything that leaves the process
@@ -182,6 +236,29 @@ func redactSession(rd *redactor, s session.Session) session.Session {
 	return out
 }
 
+// redactGit returns a copy of the git result with every output string
+// redacted. Branch, head and warnings all reach the handoff file.
+func redactGit(rd *redactor, git gitinfo.Result) gitinfo.Result {
+	out := git
+	out.RepoURL = rd.str(git.RepoURL)
+	out.Branch = rd.str(git.Branch)
+	out.Head = rd.str(git.Head)
+	out.HeadSubject = rd.str(git.HeadSubject)
+	out.DiffStatSummary = rd.str(git.DiffStatSummary)
+	out.StatusLines = redactAll(rd, git.StatusLines)
+	out.DiffStatFiles = redactAll(rd, git.DiffStatFiles)
+	out.Warnings = redactAll(rd, git.Warnings)
+	return out
+}
+
+func redactAll(rd *redactor, lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = rd.str(l)
+	}
+	return out
+}
+
 // prevForLLM extracts and redacts the previous handoff text for the prompt.
 func prevForLLM(rd *redactor, sel handoff.Selection) string {
 	if sel.Prev == nil {
@@ -190,8 +267,7 @@ func prevForLLM(rd *redactor, sel handoff.Selection) string {
 	return rd.str(sel.ForLLM())
 }
 
-// repoState mirrors gitinfo.Result into handoff.RepoState with redacted
-// git output.
+// repoState mirrors the already-redacted git result into handoff.RepoState.
 func repoState(git gitinfo.Result) handoff.RepoState {
 	return handoff.RepoState{
 		Source:          git.Source,
@@ -225,7 +301,7 @@ func touchedFiles(rd *redactor, s session.Session, git gitinfo.Result) []string 
 func buildSystemPrompt(cfg *config.Config) (string, error) {
 	base := ""
 	if cfg.SystemPromptFile != "" {
-		b, err := os.ReadFile(cfg.SystemPromptFile)
+		b, err := os.ReadFile(cfg.SystemPromptFile) //nolint:gosec // G304: the path is the user's own config value
 		if err != nil {
 			return "", fmt.Errorf("%w: read system-prompt-file: %v", cli.ErrUsage, err)
 		}
@@ -235,7 +311,7 @@ func buildSystemPrompt(cfg *config.Config) (string, error) {
 	}
 	var extras []string
 	if cfg.PromptFile != "" {
-		b, err := os.ReadFile(cfg.PromptFile)
+		b, err := os.ReadFile(cfg.PromptFile) //nolint:gosec // G304: the path is the user's own config value
 		if err != nil {
 			return "", fmt.Errorf("%w: read prompt-file: %v", cli.ErrUsage, err)
 		}
@@ -265,13 +341,14 @@ type summaryResult struct {
 	Before   int
 	After    int
 	Model    string
+	ReRolled bool
 	Warnings []string
 }
 
 // summarize reduces the transcript and, unless --raw, runs the LLM with one
 // validation re-roll.
 func (a *app) summarize(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *config.Config, rd *redactor,
-	s session.Session, status session.Status, system, facts, prevText string) (summaryResult, error) {
+	log func(string), s session.Session, status session.Status, system, facts, prevText string) (summaryResult, error) {
 
 	before := estimateTokens(s)
 	if flags.Raw {
@@ -284,22 +361,32 @@ func (a *app) summarize(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *co
 	sp := u.Step("Summarizing with " + cfg.Model)
 	defer sp.Stop()
 
-	var chunks atomic.Int64
+	log(fmt.Sprintf("input parts, estimated tokens: transcript %d, session facts %d, previous handoff %d, system prompt %d",
+		before, reduce.EstimateTokens(facts), reduce.EstimateTokens(prevText), reduce.EstimateTokens(system)))
+
 	reducer := reduce.Reducer{
 		MaxInputTokens:  cfg.MaxInputTokens,
 		SystemPromptLen: len(system),
 		FactsLen:        len(facts),
 		PrevLen:         len(prevText),
 		Summarizer: func(ctx context.Context, chunk string) (string, error) {
-			sp.Update(fmt.Sprintf("summarizing chunk %d", chunks.Add(1)))
 			return client.Summarize(ctx, handoff.ChunkPrompt(), chunk)
+		},
+		OnChunk: func(done, total int, phase string) {
+			switch phase {
+			case "older":
+				sp.Update(fmt.Sprintf("Summarizing with %s · older history %d/%d", cfg.Model, done, total))
+			case "notes":
+				sp.Update(fmt.Sprintf("Summarizing with %s · condensing notes %d/%d", cfg.Model, done, total))
+			}
 		},
 	}
 	reduced, err := reducer.Reduce(ctx, s)
 	if err != nil {
 		return summaryResult{}, llmPhase(err)
 	}
-	summary, warnings, err := a.completeAndValidate(ctx, client, rd, sp, status, system, facts, prevText, reduced)
+	sp.Update("Summarizing with " + cfg.Model + " · writing summary")
+	summary, warnings, reRolled, err := a.completeAndValidate(ctx, client, rd, sp, log, status, system, facts, prevText, reduced)
 	if err != nil {
 		return summaryResult{}, err
 	}
@@ -309,6 +396,7 @@ func (a *app) summarize(ctx context.Context, u *ui.UI, flags *cli.Flags, cfg *co
 		Before:   before,
 		After:    reduce.EstimateTokens(reduced),
 		Model:    cfg.Model,
+		ReRolled: reRolled,
 		Warnings: warnings,
 	}, nil
 }
@@ -334,9 +422,11 @@ func (a *app) rawReduce(ctx context.Context, u *ui.UI, cfg *config.Config, s ses
 }
 
 // completeAndValidate asks the LLM for the Summary and validates it with at
-// most one re-roll.
+// most one re-roll. The re-roll continues the same conversation: the model
+// sees the system prompt, its own first answer and the original user message
+// again next to the re-roll request.
 func (a *app) completeAndValidate(ctx context.Context, client *llm.Client, rd *redactor, sp *spinner,
-	status session.Status, system, facts, prevText, reduced string) (string, []string, error) {
+	log func(string), status session.Status, system, facts, prevText, reduced string) (string, []string, bool, error) {
 
 	msg := handoff.UserMessage(handoff.UserMessageInput{
 		PreviousHandoff: prevText,
@@ -345,7 +435,7 @@ func (a *app) completeAndValidate(ctx context.Context, client *llm.Client, rd *r
 	})
 	answer, _, err := client.Complete(ctx, system, msg)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: %v", errLLM, err)
+		return "", nil, false, fmt.Errorf("%w: %w", errLLM, err)
 	}
 	reRolled := false
 	opts := handoff.ValidateOptions{
@@ -354,16 +444,27 @@ func (a *app) completeAndValidate(ctx context.Context, client *llm.Client, rd *r
 		PendingTool: status.PendingToolName,
 		Reroll: func(missing []string) (string, error) {
 			reRolled = true
-			sp.Update("re-roll: filling missing sections")
-			return client.Summarize(ctx, system, handoff.RerollMessage(missing))
+			sp.Update("summary incomplete, asking again")
+			log("re-roll: missing " + strings.Join(missing, ", "))
+			text, _, err := client.Chat(ctx, []llm.Message{
+				{Role: "system", Content: system},
+				{Role: "user", Content: msg},
+				{Role: "assistant", Content: answer},
+				{Role: "user", Content: handoff.RerollMessage(missing)},
+			})
+			return text, err
 		},
 	}
 	vres := handoff.Validate(answer, opts)
-	warnings := append([]string{}, vres.Warnings...)
-	if reRolled {
-		warnings = append(warnings, "summary was re-rolled once")
+	if vres.Err != nil {
+		// A cancelled re-roll exits as 130 (the wrapped context.Canceled wins
+		// in exitFor); a per-request timeout stays an LLM failure (exit 4).
+		if errors.Is(vres.Err, context.DeadlineExceeded) {
+			return "", nil, reRolled, fmt.Errorf("%w: %w", errLLM, vres.Err)
+		}
+		return "", nil, reRolled, vres.Err
 	}
-	return rd.str(vres.Clean), warnings, nil
+	return rd.str(vres.Clean), vres.Warnings, reRolled, nil
 }
 
 // llmPhase classifies reduce-phase failures: cancellation stays itself so it
@@ -372,7 +473,7 @@ func llmPhase(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return fmt.Errorf("%w: %v", errLLM, err)
+	return fmt.Errorf("%w: %w", errLLM, err)
 }
 
 // buildClient constructs the LLM client from the merged config.
@@ -402,13 +503,15 @@ func estimateTokens(s session.Session) int {
 
 // writeDoc writes the document to the output path or stdout and returns the
 // display name for the final line.
-func (a *app) writeDoc(out output, doc handoff.Document) (string, error) {
+func (a *app) writeDoc(u *ui.UI, out output, doc handoff.Document) (string, error) {
 	if out.Stdout {
 		if _, err := fmt.Fprint(a.stdout, doc.Content); err != nil {
 			return "", fmt.Errorf("write stdout: %w", err)
 		}
 		return "-", nil
 	}
+	sp := u.Step("Writing " + out.Disp)
+	defer sp.Stop()
 	if err := handoff.WriteFile(out.Path, []byte(doc.Content)); err != nil {
 		return "", fmt.Errorf("write %s: %w", out.Path, err)
 	}

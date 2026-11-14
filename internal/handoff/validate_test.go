@@ -1,6 +1,8 @@
 package handoff
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -302,6 +304,55 @@ func TestValidateRerollErrorKeepsFirstAnswer(t *testing.T) {
 	if !containsString(res.Warnings, "re-roll request failed: LLM unreachable") {
 		t.Errorf("the re-roll error must be reported, got %v", res.Warnings)
 	}
+	if res.Err != nil {
+		t.Errorf("an ordinary LLM failure is a warning, not Err: %v", res.Err)
+	}
+}
+
+// TestValidateRerollCancelledSurfaced reproduces the Ctrl-C finding: a
+// context cancellation from the Reroll callback must not be swallowed into a
+// warning; it lands in ValidationResult.Err so the CLI can exit 130.
+func TestValidateRerollCancelledSurfaced(t *testing.T) {
+	res := Validate("broken\n", ValidateOptions{
+		Reroll: func(missing []string) (string, error) {
+			return "", fmt.Errorf("summarize: %w", context.Canceled)
+		},
+	})
+	if res.Err == nil || !errors.Is(res.Err, ErrRerollCancelled) {
+		t.Fatalf("Err = %v, want ErrRerollCancelled", res.Err)
+	}
+	if !errors.Is(res.Err, context.Canceled) {
+		t.Errorf("the wrapped context.Canceled must stay visible via errors.Is: %v", res.Err)
+	}
+	if slices.Contains(res.Warnings, "re-roll request failed: summarize: context canceled") {
+		t.Errorf("the cancellation must not be reported as a warning: %v", res.Warnings)
+	}
+}
+
+func TestValidateHashNotHeading(t *testing.T) {
+	t.Run("issue reference", func(t *testing.T) {
+		out := strings.Replace(goodSummary, "2. Then wire the reader into the codex adapter.",
+			"2. Then fix #123 and #456 issues first.", 1)
+		res := Validate(out, ValidateOptions{})
+		if len(res.Warnings) != 0 || len(res.Missing) != 0 {
+			t.Errorf("#123 must not count as a heading: warnings=%v missing=%v", res.Warnings, res.Missing)
+		}
+	})
+	t.Run("#### notes", func(t *testing.T) {
+		out := strings.Replace(goodSummary, "- Wrote internal/jsonl/reader.go with ReadBytes.",
+			"- Wrote internal/jsonl/reader.go with ReadBytes.\n#### a note", 1)
+		res := Validate(out, ValidateOptions{})
+		if len(res.Warnings) != 0 || len(res.Missing) != 0 {
+			t.Errorf("#### must not count as a heading: warnings=%v missing=%v", res.Warnings, res.Missing)
+		}
+	})
+	t.Run("### heading still checked", func(t *testing.T) {
+		out := strings.Replace(goodSummary, "### Goal\n", "### Preamble\n### Goal\n", 1)
+		res := Validate(out, ValidateOptions{})
+		if len(res.Missing) == 0 {
+			t.Error("a real ### heading outside the required set must still fail")
+		}
+	})
 }
 
 func TestExtractTLDR(t *testing.T) {

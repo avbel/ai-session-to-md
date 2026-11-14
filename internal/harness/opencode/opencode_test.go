@@ -195,14 +195,28 @@ func TestListV2Meta(t *testing.T) {
 	}
 }
 
-func TestTruncate80(t *testing.T) {
-	long := strings.Repeat("é", 60) // 120 bytes, 60 runes
-	got := truncate(long, 80)
-	if n := len([]rune(got)); n != 40 {
-		t.Fatalf("rune truncation: got %d runes, want 40", n)
+// TestBuilderDropsEmptyUserRowsSilently reproduces the real-data finding:
+// 119 of 915 real user rows are {text:"", time}; they are empty, not
+// unparseable, and must not inflate the "skipped N unparseable lines" count.
+func TestBuilderDropsEmptyUserRowsSilently(t *testing.T) {
+	path, db := buildTestDB(t)
+	insertSession(t, db, "ses_emptyrow", "/proj", "t", `{"id":"gpt-5","providerID":"openai"}`, "0.4.0", 1763000100000, nil)
+	insertMsg(t, db, "ses_emptyrow", 1, "user", map[string]any{"text": ""}, 100)
+	insertMsg(t, db, "ses_emptyrow", 2, "user", map[string]any{"text": "   "}, 200)
+	insertRawMsg(t, db, "ses_emptyrow", 3, "user", "{not json")
+	insertMsg(t, db, "ses_emptyrow", 4, "user", map[string]any{"text": "real"}, 300)
+	_ = db.Close()
+
+	a := New(filepath.Dir(path))
+	s, _ := mustLoad(t, a, "ses_emptyrow")
+	if s.Skipped != 1 {
+		t.Fatalf("Skipped = %d, want 1 (only the malformed row counts)", s.Skipped)
 	}
-	if got := truncate("short", 80); got != "short" {
-		t.Fatalf("short passthrough: %q", got)
+	if got := kindsString(s); got != "user" {
+		t.Fatalf("kinds = %q, want a single user turn", got)
+	}
+	if len(s.Turns) != 1 || s.Turns[0].Text != "real" {
+		t.Fatalf("turns = %+v", s.Turns)
 	}
 }
 

@@ -11,13 +11,16 @@ import (
 
 // limits holds the per-kind truncation caps for one rendering pass, in
 // bytes. A zero cap means uncapped (tail compaction summaries) or dropped
-// (reasoningKeep 0 in the older part).
+// (reasoningKeep 0 in the older part). editKeep is the fixed head cut for
+// edit/write tool inputs in the older part; 0 (the tail window) means the
+// input is capped like any other input instead.
 type limits struct {
 	textMax        int
 	toolResultMax  int
 	toolResultHead int
 	toolResultTail int
 	toolInputMax   int
+	editKeep       int
 	reasoningKeep  int
 	reasoningMax   int
 	compactMax     int
@@ -42,6 +45,7 @@ func olderLimits() limits {
 		toolResultHead: 10,
 		toolResultTail: 10,
 		toolInputMax:   600,
+		editKeep:       300,
 		compactMax:     8000,
 	}
 }
@@ -54,6 +58,7 @@ func (l limits) halve() limits {
 		toolResultHead: l.toolResultHead / 2,
 		toolResultTail: l.toolResultTail / 2,
 		toolInputMax:   l.toolInputMax / 2,
+		editKeep:       l.editKeep / 2,
 		reasoningKeep:  l.reasoningKeep / 2,
 		reasoningMax:   l.reasoningMax / 2,
 		compactMax:     l.compactMax / 2,
@@ -74,9 +79,9 @@ func renderTurn(num int, t session.Turn, l limits, reasoningAfter int) string {
 		if !t.Time.IsZero() {
 			header += " " + t.Time.UTC().Format(timeLayout)
 		}
-		return header + "] " + capOpt(t.Text, l.textMax) + "\n"
+		return header + "] " + escapeBlocks(capOpt(t.Text, l.textMax)) + "\n"
 	case session.AssistantText:
-		return header + "] " + capOpt(t.Text, l.textMax) + "\n"
+		return header + "] " + escapeBlocks(capOpt(t.Text, l.textMax)) + "\n"
 	case session.ToolCall:
 		return renderToolCall(num, t, l)
 	case session.ToolResult:
@@ -86,15 +91,15 @@ func renderTurn(num int, t session.Turn, l limits, reasoningAfter int) string {
 		if t.IsError {
 			header += " ERROR"
 		}
-		text := truncLines(t.Text, l.toolResultHead, l.toolResultTail, l.toolResultMax)
+		text := escapeBlocks(truncLines(t.Text, l.toolResultHead, l.toolResultTail, l.toolResultMax))
 		return header + "] " + text + "\n"
 	case session.Reasoning:
 		if reasoningAfter >= l.reasoningKeep {
 			return ""
 		}
-		return header + "] " + capOpt(t.Text, l.reasoningMax) + "\n"
+		return header + "] " + escapeBlocks(capOpt(t.Text, l.reasoningMax)) + "\n"
 	case session.CompactionSummary:
-		return header + "] " + capOpt(t.Text, l.compactMax) + "\n"
+		return header + "] " + escapeBlocks(capOpt(t.Text, l.compactMax)) + "\n"
 	case session.Interrupted:
 		return header + "]\n"
 	default:
@@ -102,12 +107,36 @@ func renderTurn(num int, t session.Turn, l limits, reasoningAfter int) string {
 	}
 }
 
+// blockEscape is prefixed to any body line starting with "[#", which a
+// transcript body could otherwise use to forge a block header. The
+// backslash keeps the text readable for the LLM while making it impossible
+// to parse as a "[#N kind …]" block start.
+const blockEscape = `\`
+
+// escapeBlocks escapes body lines that start with "[#", so turn text cannot
+// forge transcript blocks. It runs after truncation, since a cut can leave
+// a line starting with "[#".
+func escapeBlocks(s string) string {
+	if !strings.Contains(s, "[#") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for line := range strings.Lines(s) {
+		if strings.HasPrefix(line, "[#") {
+			b.WriteString(blockEscape)
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
 func renderToolCall(num int, t session.Turn, l limits) string {
 	header := fmt.Sprintf("[#%d tool_call %s", num, t.ToolName)
 	if t.ToolID != "" {
 		header += " id=" + t.ToolID
 	}
-	return header + "] " + toolInput(t, l) + "\n"
+	return header + "] " + escapeBlocks(toolInput(t, l)) + "\n"
 }
 
 // editWriteTools are the tools whose input targets a file. For these the
@@ -126,23 +155,26 @@ var editWriteTools = map[string]struct{}{
 
 func toolInput(t session.Turn, l limits) string {
 	if _, ok := editWriteTools[t.ToolName]; ok {
-		return editInput(t.Input, l.toolInputMax)
+		return editInput(t.Input, l)
 	}
 	return capOpt(t.Input, l.toolInputMax)
 }
 
-const editInputKeep = 300
-
-// editInput keeps the first editInputKeep chars of the input; when the file
-// path is not already inside them it is prepended, so the target file
-// survives truncation of a long JSON body.
-func editInput(input string, max int) string {
-	body := cutAt(input, editInputKeep)
-	path := inputPath(input)
-	if path == "" || strings.Contains(body, path) {
-		return capHeadTail(body, max)
+// editInput shapes an edit/write tool input. With editKeep > 0 (the older
+// part) it keeps the first editKeep chars; with editKeep == 0 (the tail
+// window) it keeps the whole input, capped head+tail, so the end of a long
+// edit survives. The file path is prepended when it is not already inside
+// the kept text, so the target file always survives truncation.
+func editInput(input string, l limits) string {
+	body := input
+	if l.editKeep > 0 {
+		body = cutAt(input, l.editKeep)
 	}
-	return capHeadTail("path: "+path+"\n"+body, max)
+	path := inputPath(input)
+	if path != "" && !strings.Contains(body, path) {
+		body = "path: " + path + "\n" + body
+	}
+	return capOpt(body, l.toolInputMax)
 }
 
 var (

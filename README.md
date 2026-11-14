@@ -92,13 +92,16 @@ With no arguments it opens a filterable list of the sessions for the current
 repository and asks which one to use. Type to filter, move with the arrow keys,
 press Enter to select; Esc or Ctrl-C cancels with exit code 130.
 
-The rows show fixed-width columns for age, harness, project, branch and title:
+The list header shows the scope and the key bindings; the rows show
+fixed-width columns for age, harness, project (the path relative to the scope
+root, hidden when every session shares it), branch and title:
 
 ```text
-sessions for ~/Projects/api — 8, newest first
-> 5m      claude-code  ~/Projects/api            main            Fix the flaky login test
-  3h      codex        ~/Projects/api            feat/auth       Add token refresh
-  2d      opencode     ~/Projects/api            main            Refactor the invoice exporter
+~/Projects/api · 8 sessions, newest first · type to filter · ↑↓ move · enter select · esc cancel
+age      harness  branch        title
+> 5m     claude   main          Fix the flaky login test
+  3h     codex    feat/auth     Add token refresh
+  2d     oc       main          Refactor the invoice exporter
 ```
 
 Then:
@@ -120,11 +123,30 @@ ai-session-to-md --raw --latest
 When it finishes, stderr shows the result and any warnings:
 
 ```text
-✓ wrote CODEX.md (12.3 KB) · 45k→3k tokens · redacted 2 secrets
+✓ wrote CODEX.md (12.3 KB) · 45k→3k tokens · redacted 2 secrets (aws_key, jwt)
 ```
 
-Warnings appear as separate `⚠ …` lines, for example about uncommitted
-changes, unpushed commits or unparseable session lines.
+The token numbers are the full transcript versus the reduced input the model
+actually saw. When a secret is redacted once, the line says `redacted 1
+secret`; when the kinds fit, they are named in parentheses.
+
+Warnings appear as separate `⚠ …` lines after the result, in this order: git
+state (uncommitted changes, unpushed commits, branch mismatch), skipped
+unparseable lines, then summary-quality notes. `summary was re-rolled once`
+appears only with `--verbose`.
+
+Failures print as `✗ <what happened>` with an indented `  hint: <what to do>`
+line, for example:
+
+```text
+✗ LLM request failed: HTTP 401: invalid api key
+  hint: check the API key named by --api-key-env, or run with --raw
+```
+
+If the output file already exists, the tool asks first (`Overwrite CODEX.md?`,
+default No) and shows which session is about to be recorded; answering No
+keeps the file (`kept CODEX.md; use -o PATH or --force`). Without a terminal
+it refuses instead of guessing and asks for `--force`.
 
 ## Usage reference
 
@@ -372,8 +394,9 @@ TL;DR: <one line: goal, where it stopped, what to do first>
 ```
 
 `### Next steps` must be a numbered list starting at `1.`. Output that misses
-a part gets one automatic re-roll; if it still fails, the file is written with
-warnings.
+a part gets one automatic re-roll — the model sees its own previous answer and
+the original input again, so it corrects the missing sections instead of
+starting over. If it still fails, the file is written with warnings.
 
 ## The handoff file
 
@@ -532,10 +555,10 @@ Supported formats:
 |---|---|
 | 0 | success |
 | 1 | runtime error (I/O, git, unreadable store, …) |
-| 2 | usage/config error (bad flag, missing model, no TTY, ambiguous id, unsafe base URL) |
+| 2 | usage/config error (bad flag, missing model or API key, no TTY, ambiguous id, unsafe base URL, refused overwrite) |
 | 3 | no sessions found for the current scope |
 | 4 | LLM error (HTTP failure, transcript too large for the token budget, other summarize failures) |
-| 130 | cancelled (Ctrl-C, Esc or `q` in the picker) |
+| 130 | cancelled (Ctrl-C or Esc in the picker, or declining the overwrite confirm) |
 
 ## Development
 

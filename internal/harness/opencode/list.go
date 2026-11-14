@@ -37,7 +37,9 @@ func (a *Adapter) listV2(ctx context.Context, db *sql.DB, path string, opt harne
 			continue
 		}
 		if m.Title == "" {
-			m.Title = truncate(firstUserText(ctx, db, m.ID), 80)
+			// Keep the full first-user-message text: display truncation
+			// happens in the CLI via handoff.CleanTitle, never at list time.
+			m.Title = firstUserText(ctx, db, m.ID)
 		}
 		out = append(out, m)
 		if opt.Limit > 0 && len(out) >= opt.Limit {

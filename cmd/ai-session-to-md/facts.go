@@ -55,7 +55,8 @@ type factsDoc struct {
 }
 
 // buildFacts renders the redacted session, status and git state into the
-// compact facts JSON.
+// compact facts JSON. git is already redacted as a whole (see redactGit); rd
+// is only for the per-file touched list.
 func buildFacts(meta session.Meta, s session.Session, status session.Status, git gitinfo.Result, rd *redactor) string {
 	doc := factsDoc{
 		Harness:   string(meta.Harness),
@@ -77,20 +78,16 @@ func buildFacts(meta session.Meta, s session.Session, status session.Status, git
 	}
 	doc.Git = gitFacts{
 		Source:          git.Source,
-		RepoURL:         rd.str(git.RepoURL),
+		RepoURL:         git.RepoURL,
 		Branch:          git.Branch,
 		Head:            git.Head,
-		HeadSubject:     rd.str(git.HeadSubject),
+		HeadSubject:     git.HeadSubject,
 		Ahead:           git.Ahead,
 		Behind:          git.Behind,
 		UpstreamMissing: git.UpstreamMissing,
-		DiffStatSummary: rd.str(git.DiffStatSummary),
-	}
-	for _, line := range git.StatusLines {
-		doc.Git.StatusLines = append(doc.Git.StatusLines, rd.str(line))
-	}
-	for _, f := range git.DiffStatFiles {
-		doc.Git.DiffStatFiles = append(doc.Git.DiffStatFiles, rd.str(f))
+		DiffStatSummary: git.DiffStatSummary,
+		StatusLines:     git.StatusLines,
+		DiffStatFiles:   git.DiffStatFiles,
 	}
 	doc.FilesTouched = touchedFiles(rd, s, git)
 	b, err := json.Marshal(doc)

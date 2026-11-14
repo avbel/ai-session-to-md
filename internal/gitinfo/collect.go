@@ -29,21 +29,30 @@ const (
 )
 
 // gather runs the read-only git commands that only need the repository root,
-// all in parallel; each carries its own timeout.
-func gather(ctx context.Context, root string) [fCount]fact {
+// all in parallel; each carries its own timeout. status and diff --stat read
+// worktree paths, so they are dropped when worktree is false (a local filter
+// or diff driver is configured).
+func gather(ctx context.Context, root string, worktree bool) [fCount]fact {
 	specs := [fCount][]string{
 		fURL:      {"remote", "get-url", "origin"},
 		fBranch:   {"rev-parse", "--abbrev-ref", "HEAD"},
 		fHead:     {"rev-parse", "--short=12", "HEAD"},
 		fSubject:  {"log", "-1", "--format=%s"},
 		fStatus:   {"status", "--porcelain=v1", "--untracked-files=normal"},
-		fDiff:     {"diff", "--stat", "HEAD"},
+		fDiff:     {"diff", "--no-ext-diff", "--stat", "HEAD"},
 		fUpstream: {"rev-list", "--left-right", "--count", "@{u}...HEAD"},
+	}
+	if !worktree {
+		specs[fStatus] = nil
+		specs[fDiff] = nil
 	}
 	var facts [fCount]fact
 	var wg sync.WaitGroup
 	for i := range specs {
 		wg.Go(func() {
+			if len(specs[i]) == 0 {
+				return
+			}
 			facts[i].out, facts[i].err = gitOut(ctx, root, specs[i]...)
 		})
 	}
@@ -52,11 +61,11 @@ func gather(ctx context.Context, root string) [fCount]fact {
 }
 
 func live(ctx context.Context, root string, rec session.GitRecord) Result {
-	facts := gather(ctx, root)
+	facts := gather(ctx, root, !hasLocalDrivers(ctx, root))
 	res := Result{
 		Source:      SourceLive,
 		Root:        root,
-		RepoURL:     cmp.Or(stripCredentials(facts[fURL].out), rec.RepoURL),
+		RepoURL:     cmp.Or(stripCredentials(facts[fURL].out), stripCredentials(rec.RepoURL)),
 		Branch:      strings.TrimSpace(facts[fBranch].out),
 		Head:        strings.TrimSpace(facts[fHead].out),
 		HeadSubject: strings.TrimSpace(facts[fSubject].out),
@@ -90,11 +99,13 @@ func aheadBehind(f fact) (ahead, behind int, missing bool) {
 	return a, b, false
 }
 
-// countCommits counts commits on HEAD, used as the unpushed estimate when the
-// branch has no upstream: nothing has been pushed anywhere. A repo with no
-// commits counts as 0.
+// countCommits counts commits on HEAD that no remote ref reaches, used as
+// the unpushed estimate when the branch has no upstream. A repo with no
+// commits, or with no remotes at all, counts 0 for the former and every
+// commit for the latter — the warning wording says "exist only here" for
+// that case.
 func countCommits(ctx context.Context, root string) int {
-	out, err := gitOut(ctx, root, "rev-list", "--count", "HEAD")
+	out, err := gitOut(ctx, root, "rev-list", "--count", "HEAD", "--not", "--remotes")
 	if err != nil {
 		return 0
 	}

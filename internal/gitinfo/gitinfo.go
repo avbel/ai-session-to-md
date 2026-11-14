@@ -107,20 +107,29 @@ func usableDir(cwd string) (string, error) {
 func recorded(rec session.GitRecord) Result {
 	return Result{
 		Source:  SourceRecorded,
-		RepoURL: rec.RepoURL,
+		RepoURL: stripCredentials(rec.RepoURL),
 		Branch:  rec.Branch,
 		Head:    rec.Commit,
 	}
 }
 
 // warnings builds the handoff warning block: a dirty tree, unpushed commits,
-// and a branch that differs from the one the session recorded.
+// and a branch that differs from the one the session recorded. A missing
+// upstream gets its own wording — those commits may be pushed to another
+// branch's remote, or the branch may never have been pushed, so plain "not
+// pushed" would be wrong.
 func warnings(res Result, recordedBranch string) []string {
 	var w []string
 	if len(res.StatusLines) > 0 {
 		w = append(w, dirtyWarning)
 	}
-	if res.Ahead > 0 {
+	switch {
+	case res.UpstreamMissing && res.Ahead > 0:
+		w = append(w, fmt.Sprintf("branch %s has no upstream; %d commits exist only here — git push -u origin %s",
+			res.Branch, res.Ahead, res.Branch))
+	case res.UpstreamMissing && res.Branch != "":
+		w = append(w, fmt.Sprintf("branch %s has no upstream.", res.Branch))
+	case !res.UpstreamMissing && res.Ahead > 0:
 		w = append(w, fmt.Sprintf("%d commits not pushed.", res.Ahead))
 	}
 	if recordedBranch != "" && res.Branch != "" && res.Branch != recordedBranch {

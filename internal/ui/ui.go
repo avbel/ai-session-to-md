@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
 	"golang.org/x/term"
@@ -40,6 +41,11 @@ type UI struct {
 	Quiet  bool
 
 	width int
+
+	// spins counts spinners currently animating on the TTY; output printed
+	// while one is active clears the spinner line first, so it does not glue
+	// onto a spinner frame.
+	spins atomic.Int64
 }
 
 // New builds a UI. inTTY/errTTY report whether stdin/stderr are terminals.
@@ -90,12 +96,14 @@ var (
 	styleBold   = lipgloss.NewStyle().Bold(true)
 	styleGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	styleYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	styleRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	styleDim    = lipgloss.NewStyle().Faint(true)
 )
 
 func (u *UI) bold(s string) string   { return u.paint(styleBold, s) }
 func (u *UI) green(s string) string  { return u.paint(styleGreen, s) }
 func (u *UI) yellow(s string) string { return u.paint(styleYellow, s) }
+func (u *UI) red(s string) string    { return u.paint(styleRed, s) }
 func (u *UI) dim(s string) string    { return u.paint(styleDim, s) }
 
 // paint renders s with the style only when color is on, so the plain output
@@ -108,6 +116,11 @@ func (u *UI) paint(style lipgloss.Style, s string) string {
 }
 
 func (u *UI) printLine(s string) {
+	if u.spins.Load() > 0 {
+		// A spinner is animating: clear its line first so this line does not
+		// glue onto a frame.
+		_, _ = fmt.Fprint(u.Stderr, "\r\x1b[2K")
+	}
 	_, _ = fmt.Fprintln(u.Stderr, s)
 }
 

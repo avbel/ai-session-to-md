@@ -2,7 +2,9 @@ package opencode
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,11 +16,64 @@ func TestSQLiteURI(t *testing.T) {
 		{`C:\Users\avbel\AppData\opencode.db`, "file:///C:/Users/avbel/AppData/opencode.db"},
 		{`C:/Users/x/opencode.db`, "file:///C:/Users/x/opencode.db"},
 		{"relative/opencode.db", "file:relative/opencode.db"},
+		{"/tmp/store#x/opencode.db", "file:///tmp/store%23x/opencode.db"},
+		{"/tmp/store?x/opencode.db", "file:///tmp/store%3Fx/opencode.db"},
+		{"/tmp/sp ace/opencode.db", "file:///tmp/sp%20ace/opencode.db"},
 	}
 	for _, tc := range cases {
 		if got := sqliteURI(tc.in); got != tc.want {
 			t.Errorf("sqliteURI(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestOpenStoreSpecialCharsPath reproduces the finding: a directory whose
+// name contains # or ? must still open read-only; unescaped, the # silently
+// truncated the URI and dropped mode=ro.
+func TestOpenStoreSpecialCharsPath(t *testing.T) {
+	base := t.TempDir()
+	clean := filepath.Join(base, "cleandir")
+	if err := os.MkdirAll(clean, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(clean, "opencode.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open fixture db: %v", err)
+	}
+	for _, ddl := range v2Schema() {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("exec %q: %v", ddl, err)
+		}
+	}
+	insertSession(t, db, "ses_hash01", "/proj", "s", "", "v1", 1763000100000, nil)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A plain-path DSN truncates at '?', so build the db under a clean name
+	// and move it into the special-character directory afterwards.
+	dir := filepath.Join(base, "store#x?y")
+	if err := os.Rename(clean, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(dir)
+	metas, err := a.List(context.Background(), listOptAll())
+	if err != nil {
+		t.Fatalf("List with #/? in dir: %v", err)
+	}
+	if len(metas) != 1 || metas[0].ID != "ses_hash01" {
+		t.Fatalf("metas = %+v", metas)
+	}
+	// mode=ro must survive the escaping: a write through the read-only URI
+	// must be refused.
+	ro, err := sql.Open("sqlite", sqliteURI(filepath.Join(dir, "opencode.db"))+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ro.Close() }()
+	if _, err := ro.Exec(`CREATE TABLE ro_check (x)`); err == nil {
+		t.Error("the read-only URI must reject writes")
 	}
 }
 

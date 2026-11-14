@@ -128,8 +128,9 @@ func TestInfoLiveClean(t *testing.T) {
 	if res.Ahead != 1 {
 		t.Errorf("ahead = %d, want 1 commit", res.Ahead)
 	}
-	if !slices.Contains(res.Warnings, "1 commits not pushed.") {
-		t.Errorf("warnings = %v, want unpushed-commit warning", res.Warnings)
+	want := "branch main has no upstream; 1 commits exist only here — git push -u origin main"
+	if !slices.Contains(res.Warnings, want) {
+		t.Errorf("warnings = %v, want no-upstream warning %q", res.Warnings, want)
 	}
 }
 
@@ -251,6 +252,21 @@ func TestInfoRecordedFallback(t *testing.T) {
 	}
 }
 
+func TestInfoRecordedRepoURLStripped(t *testing.T) {
+	rec := session.GitRecord{RepoURL: "https://ci-user:hunter2@example.com/avbel/private.git"}
+
+	res, err := Info(t.Context(), filepath.Join(t.TempDir(), "gone"), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Source != SourceRecorded {
+		t.Errorf("source = %q, want %q", res.Source, SourceRecorded)
+	}
+	if res.RepoURL != "https://example.com/avbel/private.git" {
+		t.Errorf("repoURL = %q, want the recorded credentials stripped", res.RepoURL)
+	}
+}
+
 func TestInfoCredentialURLStripped(t *testing.T) {
 	dir := newRepo(t)
 	runGit(t, dir, "remote", "add", "origin", "https://ci-user:hunter2@example.com/avbel/private.git")
@@ -261,6 +277,81 @@ func TestInfoCredentialURLStripped(t *testing.T) {
 	}
 	if res.RepoURL != "https://example.com/avbel/private.git" {
 		t.Errorf("repoURL = %q, want credentials stripped", res.RepoURL)
+	}
+}
+
+func TestInfoTokenOnlyRemoteStripped(t *testing.T) {
+	dir := newRepo(t)
+	runGit(t, dir, "remote", "add", "origin",
+		"https://"+"a1b2c3d4e5"+"f6a1b2c3d4e5f6a1b2c3d4e5"+"@example.com/avbel/private.git")
+
+	res, err := Info(t.Context(), dir, session.GitRecord{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RepoURL != "https://example.com/avbel/private.git" {
+		t.Errorf("repoURL = %q, want the token-only userinfo stripped", res.RepoURL)
+	}
+}
+
+func TestInfoNoUpstreamNothingPushed(t *testing.T) {
+	dir := newRepo(t)
+	// A remote exists but was never fetched, so there is no tracking ref
+	// and @{u} does not resolve: upstream missing, all commits local.
+	setUpstream(t, dir, testRemoteURL, "")
+
+	res, err := Info(t.Context(), dir, session.GitRecord{Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.UpstreamMissing || res.Ahead != 1 {
+		t.Errorf("upstream missing = %v, ahead = %d, want true/1", res.UpstreamMissing, res.Ahead)
+	}
+	want := "branch main has no upstream; 1 commits exist only here — git push -u origin main"
+	if !slices.Contains(res.Warnings, want) {
+		t.Errorf("warnings = %v, want %q", res.Warnings, want)
+	}
+}
+
+func TestInfoNoUpstreamAllPushed(t *testing.T) {
+	dir := newRepo(t)
+	// The remote-tracking ref has everything, but the branch has no
+	// tracking configuration, so @{u} still fails: report the plain
+	// no-upstream note, not "N commits exist only here".
+	runGit(t, dir, "remote", "add", "origin", testRemoteURL)
+	runGit(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+	res, err := Info(t.Context(), dir, session.GitRecord{Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.UpstreamMissing || res.Ahead != 0 {
+		t.Errorf("upstream missing = %v, ahead = %d, want true/0", res.UpstreamMissing, res.Ahead)
+	}
+	if !slices.Contains(res.Warnings, "branch main has no upstream.") {
+		t.Errorf("warnings = %v, want the plain no-upstream note", res.Warnings)
+	}
+}
+
+func TestInfoWorktreeSkippedWithDriver(t *testing.T) {
+	dir := newRepo(t)
+	// A local smudge/clean filter would run on worktree paths git reads
+	// for status and diff, so those two commands must be skipped.
+	runGit(t, dir, "config", "filter.demo.clean", "sed s/one/two/g")
+	writeFile(t, filepath.Join(dir, "b.txt"), "new\n")
+
+	res, err := Info(t.Context(), dir, session.GitRecord{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.StatusLines) != 0 || res.DiffStatSummary != "" || len(res.DiffStatFiles) != 0 {
+		t.Errorf("status/diffstat = %v %q %v, want empty with a filter driver", res.StatusLines, res.DiffStatSummary, res.DiffStatFiles)
+	}
+	if slices.Contains(res.Warnings, dirtyWarning) {
+		t.Errorf("warnings = %v, want no dirty warning: status was skipped", res.Warnings)
+	}
+	if res.Branch != "main" || res.HeadSubject != "initial commit" {
+		t.Errorf("branch/subject = %q/%q, want the non-worktree facts still live", res.Branch, res.HeadSubject)
 	}
 }
 

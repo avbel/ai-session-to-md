@@ -13,6 +13,7 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -26,7 +27,12 @@ import (
 // too; the adapter re-checks so the exec is safe on its own.
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{6,}$`)
 
-var errListUnsupported = fmt.Errorf("OpenCode storage not recognised; pass a session id")
+// ErrFallbackNeedsID marks an OpenCode store without the v2 tables: listing
+// is impossible and a session id must go through `opencode session export`.
+// The CLI detects it on Resolve's no-match error via
+// errors.As(err, *harness.AdapterError) + errors.Is(ae.Err, ErrFallbackNeedsID)
+// and enters fallback mode with Meta{ID: <given id>}.
+var ErrFallbackNeedsID = errors.New("OpenCode storage not recognised; pass a session id")
 
 // Adapter implements harness.Adapter for OpenCode.
 type Adapter struct {
@@ -88,7 +94,7 @@ func (a *Adapter) List(ctx context.Context, opt harness.ListOptions) ([]session.
 	}
 	defer st.Close()
 	if !st.v2 {
-		return nil, errListUnsupported
+		return nil, ErrFallbackNeedsID
 	}
 	return a.listV2(ctx, st.db, a.dbPath(), opt)
 }

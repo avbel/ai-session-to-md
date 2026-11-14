@@ -12,14 +12,20 @@ import (
 )
 
 // Column widths of the picker label; the title gets whatever is left.
+// Deviation from the plan's §15 widths, per review: the harness column shows
+// short names (claude/codex/opencode, 8 cells), the project column shows the
+// path relative to the scope root (12 cells, hidden when every row shares it)
+// and the branch column is 12 cells.
 const (
 	ageCol     = 6
-	harnessCol = 11
-	projectCol = 24
-	branchCol  = 14
+	harnessCol = 8
+	projCol    = 12
+	branchCol  = 12
 	colGap     = 2
 	minTitle   = 8
 )
+
+func colGapStr() string { return strings.Repeat(" ", colGap) }
 
 // pickLabelMargin reserves room for the huh selector cursor and the theme's
 // base padding, so labels never wrap inside the viewport.
@@ -29,25 +35,27 @@ const pickLabelMargin = 4
 const maxPickHeight = 15
 
 // Pick shows the session list in a huh select with filtering on. Esc and
-// Ctrl-C return ErrCancelled (exit 130), an empty list ErrNoSessions
-// (exit 3). The caller redacts the metas it wants displayed.
-func (u *UI) Pick(ctx context.Context, metas []session.Meta, root string, now time.Time) (session.Meta, error) {
+// Ctrl-C return ErrCancelled (exit 130), an empty list ErrNoSessions (exit
+// 3). The caller redacts the metas it wants displayed; all says whether the
+// list spans every project (--all), which the header reflects.
+func (u *UI) Pick(ctx context.Context, metas []session.Meta, root string, all bool, now time.Time) (session.Meta, error) {
 	if len(metas) == 0 {
 		return session.Meta{}, fmt.Errorf("no sessions for %s; try --all: %w", root, ErrNoSessions)
 	}
-	home := homeDir()
-	rows := FormatRows(metas, now, home, u.width-pickLabelMargin)
+	layout := newPickLayout(metas, homeDir(), root, u.width-pickLabelMargin)
 	options := make([]huh.Option[session.Meta], len(metas))
 	for i, m := range metas {
-		options[i] = huh.NewOption(rows[i], m)
+		options[i] = huh.NewOption(layout.row(m, now), m)
 	}
 	var picked session.Meta
 	sel := huh.NewSelect[session.Meta]().
-		Title(fmt.Sprintf("sessions for %s — %d, newest first", root, len(metas))).
 		Options(options...).
 		Value(&picked).
 		Filtering(true).
-		Height(min(maxPickHeight, len(metas)) + 1)
+		// With Filtering(true) the title never renders; the context lives in
+		// the description, which does.
+		Description(u.pickDescription(root, all, len(metas), layout)).
+		Height(min(maxPickHeight, len(metas)) + 2)
 	sel.WithWidth(u.width)
 	if err := u.runForm(ctx, huh.NewGroup(sel)); err != nil {
 		return session.Meta{}, err
@@ -55,38 +63,117 @@ func (u *UI) Pick(ctx context.Context, metas []session.Meta, root string, now ti
 	return picked, nil
 }
 
-// FormatRows renders the picker option labels:
-//
-//	<age 6>  <harness 11>  <project 24>  <branch 14>  <title…>
-//
-// truncated to width.
-func FormatRows(metas []session.Meta, now time.Time, home string, width int) []string {
-	title := width - (ageCol + harnessCol + projectCol + branchCol + 4*colGap)
-	title = max(title, minTitle)
+// pickDescription renders the two header lines: the scope and key bindings,
+// then the column header.
+func (u *UI) pickDescription(root string, all bool, n int, l pickLayout) string {
+	scope := RelHome(root, homeDir())
+	if all {
+		scope = "all projects"
+	}
+	line1 := fmt.Sprintf("%s · %d sessions, newest first · type to filter · ↑↓ move · enter select · esc cancel", scope, n)
+	return line1 + "\n" + l.header()
+}
+
+// pickLayout is the resolved column layout of the picker rows.
+type pickLayout struct {
+	home, root  string
+	showProject bool
+	titleWidth  int
+}
+
+func newPickLayout(metas []session.Meta, home, root string, width int) pickLayout {
+	showProject := len(metas) > 0 && !allEqual(metas, func(m session.Meta) string {
+		return projectCell(m.Cwd, root, home)
+	})
+	// Gaps sit between the cells: two columns share one gap each.
+	fixed := ageCol + harnessCol + branchCol + 3*colGap
+	if showProject {
+		fixed += projCol + colGap
+	}
+	return pickLayout{
+		home:        home,
+		root:        root,
+		showProject: showProject,
+		titleWidth:  max(width-fixed, minTitle),
+	}
+}
+
+func (l pickLayout) header() string {
+	cells := []string{
+		padRight("age", ageCol),
+		padRight("harness", harnessCol),
+	}
+	if l.showProject {
+		cells = append(cells, padRight("project", projCol))
+	}
+	cells = append(cells, padRight("branch", branchCol), "title")
+	return strings.Join(cells, colGapStr())
+}
+
+func (l pickLayout) rows(metas []session.Meta, now time.Time) []string {
 	rows := make([]string, len(metas))
 	for i, m := range metas {
-		rows[i] = FormatRow(m, now, home, title)
+		rows[i] = l.row(m, now)
 	}
 	return rows
 }
 
-// FormatRow renders one option label with fixed-width columns.
-func FormatRow(m session.Meta, now time.Time, home string, titleWidth int) string {
-	age := padRight(FormatAge(m.UpdatedAt, now), ageCol)
-	name := padRight(truncRight(displayHarness(m.Harness), harnessCol), harnessCol)
-	proj := padRight(middleTruncate(relHome(m.Cwd, home), projectCol), projectCol)
-	branch := padRight(truncRight(m.Branch, branchCol), branchCol)
-	title := truncRight(m.Title, titleWidth)
-	if title == "" {
-		title = "-"
+func (l pickLayout) row(m session.Meta, now time.Time) string {
+	cells := []string{
+		padRight(FormatAge(m.UpdatedAt, now), ageCol),
+		padRight(truncCells(displayHarness(m.Harness), harnessCol), harnessCol),
 	}
-	return strings.Join([]string{age, name, proj, branch, title}, strings.Repeat(" ", colGap))
+	if l.showProject {
+		cells = append(cells, padRight(projectCell(m.Cwd, l.root, l.home), projCol))
+	}
+	cells = append(cells,
+		padRight(truncCells(m.Branch, branchCol), branchCol),
+		truncCells(m.Title, l.titleWidth))
+	return strings.Join(cells, colGapStr())
+}
+
+// projectCell renders a session cwd relative to the scope root, truncated
+// with its last path segment kept whole. A session in the root itself shows
+// the ~-folded root instead of a bare ".".
+func projectCell(cwd, root, home string) string {
+	if cwd == "" {
+		return "-"
+	}
+	return middleTruncatePath(relScope(cwd, root, home), projCol)
+}
+
+// relScope expresses cwd relative to root when it sits under it, else
+// relative to home.
+func relScope(cwd, root, home string) string {
+	if root != "" {
+		if rel, err := filepath.Rel(root, cwd); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel == "." {
+				return RelHome(cwd, home)
+			}
+			return rel
+		}
+	}
+	return RelHome(cwd, home)
+}
+
+func allEqual(metas []session.Meta, key func(session.Meta) string) bool {
+	if len(metas) == 0 {
+		return true
+	}
+	first := key(metas[0])
+	for _, m := range metas[1:] {
+		if key(m) != first {
+			return false
+		}
+	}
+	return true
 }
 
 func displayHarness(h session.Harness) string {
 	switch h {
 	case session.HarnessClaudeCode:
-		return "claude-code"
+		return "claude"
 	default:
 		return string(h)
 	}
@@ -110,8 +197,8 @@ func FormatAge(t, now time.Time) string {
 	}
 }
 
-// relHome shortens an absolute path under home to "~/…".
-func relHome(p, home string) string {
+// RelHome shortens an absolute path under home to "~/…".
+func RelHome(p, home string) string {
 	if p == "" {
 		return "-"
 	}
@@ -127,36 +214,22 @@ func relHome(p, home string) string {
 	return p
 }
 
-// middleTruncate cuts s to max runes keeping its head and tail with an
-// ellipsis in between ("…").
-func middleTruncate(s string, max int) string {
-	r := []rune(s)
-	if max <= 0 || len(r) <= max {
-		return s
+// FormatMatches renders ambiguous-match table rows in the picker's column
+// style: age, harness, id, branch, title. The caller truncates by passing
+// width and applies redaction/CleanTitle itself if needed.
+func FormatMatches(metas []session.Meta, now time.Time, width int) []string {
+	const idCol = 28
+	fixed := ageCol + harnessCol + idCol + branchCol + 4*colGap
+	title := max(width-fixed, minTitle)
+	rows := make([]string, len(metas))
+	for i, m := range metas {
+		rows[i] = strings.Join([]string{
+			padRight(FormatAge(m.UpdatedAt, now), ageCol),
+			padRight(truncCells(displayHarness(m.Harness), harnessCol), harnessCol),
+			padRight(truncCells(m.ID, idCol), idCol),
+			padRight(truncCells(m.Branch, branchCol), branchCol),
+			truncCells(m.Title, title),
+		}, colGapStr())
 	}
-	if max == 1 {
-		return "…"
-	}
-	head := (max - 1 + 1) / 2
-	tail := max - 1 - head
-	return string(r[:head]) + "…" + string(r[len(r)-tail:])
-}
-
-// truncRight cuts s to max runes, replacing the last one with an ellipsis.
-func truncRight(s string, max int) string {
-	r := []rune(s)
-	if max <= 0 {
-		return ""
-	}
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max-1]) + "…"
-}
-
-func padRight(s string, width int) string {
-	if n := len([]rune(s)); n < width {
-		return s + strings.Repeat(" ", width-n)
-	}
-	return s
+	return rows
 }

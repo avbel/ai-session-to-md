@@ -25,7 +25,8 @@ func TestOverwriteRules(t *testing.T) {
 	llm.requireCount(t, 2)
 }
 
-// assertNoForceRefusal requires exit 2 and an untouched file.
+// assertNoForceRefusal requires exit 2 and an untouched file, with the file
+// named in the message.
 func assertNoForceRefusal(t *testing.T, e *testEnv) {
 	t.Helper()
 	path := handoffPath(e, "CLAUDE_CODE.md")
@@ -36,6 +37,7 @@ func assertNoForceRefusal(t *testing.T, e *testEnv) {
 	res := e.run("claude-code", "--latest")
 	wantExit(t, res, 2)
 	mustContain(t, res.Stderr, "pass --force", "stderr")
+	mustContain(t, res.Stderr, "CLAUDE_CODE.md", "stderr names the file")
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read handoff after refusal: %v", err)
@@ -76,6 +78,7 @@ func assertSymlinkRefused(t *testing.T, e *testEnv) {
 	res := e.run("claude-code", "--latest", "-o", "symlink-out.md", "--force")
 	wantExit(t, res, 2)
 	mustContain(t, res.Stderr, "symlink", "stderr")
+	mustContain(t, res.Stderr, "symlink-out.md", "stderr names the path")
 	data, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read symlink target: %v", err)
@@ -88,6 +91,7 @@ func TestExitCodes(t *testing.T) {
 	t.Run("no sessions", exitNoSessions)
 	t.Run("ambiguous id prefix", exitAmbiguousPrefix)
 	t.Run("missing model", exitMissingModel)
+	t.Run("missing api key", exitMissingAPIKey)
 	t.Run("non-loopback http base url", exitBadBaseURL)
 	t.Run("llm 401 is final", exitLLM401)
 	t.Run("429 then 200", exitRetry429)
@@ -99,6 +103,11 @@ func exitNoSessions(t *testing.T) {
 	res := e.run("claude-code", "--latest")
 	wantExit(t, res, 3)
 	mustContain(t, res.Stderr, "no sessions", "stderr")
+	mustContain(t, res.Stderr, "--all", "stderr hint")
+
+	resAll := e.run("--all", "--latest")
+	wantExit(t, resAll, 3)
+	mustContain(t, resAll.Stderr, "no sessions", "stderr")
 }
 
 func exitAmbiguousPrefix(t *testing.T) {
@@ -116,6 +125,7 @@ func exitAmbiguousPrefix(t *testing.T) {
 	wantExit(t, res, 2)
 	mustContain(t, res.Stderr, dupIDA, "stderr matches")
 	mustContain(t, res.Stderr, dupIDB, "stderr matches")
+	mustContain(t, res.Stderr, "pass more characters", "stderr hint")
 	llm.requireCount(t, 0)
 }
 
@@ -128,6 +138,24 @@ func exitMissingModel(t *testing.T) {
 	res := e.run("claude-code", "--latest")
 	wantExit(t, res, 2)
 	mustContain(t, res.Stderr, "model", "stderr")
+	mustContain(t, res.Stderr, "--raw", "stderr hint")
+	mustContain(t, res.Stderr, "config.toml", "stderr names the config file")
+	llm.requireCount(t, 0)
+}
+
+func exitMissingAPIKey(t *testing.T) {
+	e := newTestEnv(t)
+	writeClaudeProject(t, e, standardClaudeSession(e))
+	llm := e.useLLM(llmValid)
+	e.unset("AISMD_API_KEY")
+	// The fake LLM endpoint is loopback, which is exempt; point the base URL
+	// at a remote https host so the key is required.
+	e.set("AISMD_BASE_URL", "https://api.openai.com/v1")
+
+	res := e.run("claude-code", "--latest")
+	wantExit(t, res, 2)
+	mustContain(t, res.Stderr, "AISMD_API_KEY", "stderr names the env var")
+	mustContain(t, res.Stderr, "--raw", "stderr hint")
 	llm.requireCount(t, 0)
 }
 
@@ -151,6 +179,8 @@ func exitLLM401(t *testing.T) {
 	res := e.run("claude-code", "--latest")
 	wantExit(t, res, 4)
 	mustContain(t, res.Stderr, "401", "stderr")
+	mustContain(t, res.Stderr, "invalid api key", "stderr error.message")
+	mustContain(t, res.Stderr, "--raw", "stderr hint")
 	mustNotContain(t, res.Stderr, "test-key-fake", "stderr")
 	mustNotContain(t, res.Stderr, "Authorization", "stderr")
 	llm.requireCount(t, 1)
@@ -172,5 +202,7 @@ func exitSlowTimeout(t *testing.T) {
 
 	res := e.run("claude-code", "--latest", "--timeout", "500ms")
 	wantExit(t, res, 4)
+	mustContain(t, res.Stderr, "timed out", "stderr")
+	mustContain(t, res.Stderr, "--timeout", "stderr hint")
 	llm.requireCount(t, 1)
 }

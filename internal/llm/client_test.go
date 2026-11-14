@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -522,5 +523,173 @@ func TestSummarizeShape(t *testing.T) {
 	}
 	if text != "done" {
 		t.Errorf("text = %q", text)
+	}
+}
+
+func TestChatPreservesMessageOrder(t *testing.T) {
+	srv, log := startServer(t, func(_ int, w http.ResponseWriter, _ *http.Request) { writeOK(w, "ok") })
+	c := newTestClient(t, srv.URL, nil)
+	msgs := []Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"},
+	}
+	if _, _, err := c.Chat(t.Context(), msgs); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	raw, ok := log.body(0)["messages"].([]any)
+	if !ok || len(raw) != 4 {
+		t.Fatalf("messages = %v", log.body(0)["messages"])
+	}
+	want := [][2]string{{"system", "sys"}, {"user", "u1"}, {"assistant", "a1"}, {"user", "u2"}}
+	for i, w := range want {
+		m := raw[i].(map[string]any)
+		if m["role"] != w[0] || m["content"] != w[1] {
+			t.Errorf("message %d = %v, want %v", i, m, w)
+		}
+	}
+}
+
+func TestChatValidatesMessages(t *testing.T) {
+	c := newTestClient(t, "http://127.0.0.1:1/v1", nil)
+	for _, msgs := range [][]Message{
+		nil,
+		{},
+		{{Role: "root", Content: "x"}},
+		{{Role: "", Content: "x"}},
+		{{Role: "user", Content: "  "}},
+	} {
+		if _, _, err := c.Chat(t.Context(), msgs); !errors.Is(err, ErrUsage) {
+			t.Errorf("Chat(%v): err = %v, want ErrUsage", msgs, err)
+		}
+	}
+}
+
+func TestChatCompleteEquivalence(t *testing.T) {
+	srv, log := startServer(t, func(_ int, w http.ResponseWriter, _ *http.Request) { writeOK(w, "ok") })
+	c := newTestClient(t, srv.URL, nil)
+	if _, _, err := c.Complete(t.Context(), "sys", "usr"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	raw, ok := log.body(0)["messages"].([]any)
+	if !ok || len(raw) != 2 {
+		t.Fatalf("messages = %v", log.body(0)["messages"])
+	}
+	first := raw[0].(map[string]any)
+	second := raw[1].(map[string]any)
+	if first["role"] != "system" || first["content"] != "sys" {
+		t.Errorf("first = %v", first)
+	}
+	if second["role"] != "user" || second["content"] != "usr" {
+		t.Errorf("second = %v", second)
+	}
+}
+
+func TestRedirectNotFollowed(t *testing.T) {
+	// A redirect is returned to the caller as a plain non-200 instead of
+	// being followed, so the Authorization header can never reach the
+	// redirect target.
+	srv, log := startServer(t, func(n int, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			http.Redirect(w, &http.Request{URL: &url.URL{Scheme: "http", Host: "attacker.example"}}, "http://attacker.example/steal", http.StatusFound)
+			return
+		}
+		writeOK(w, "leaked")
+	})
+	c := newTestClient(t, srv.URL, nil)
+	_, _, err := c.Complete(t.Context(), "s", "u")
+	apiErr, ok := errors.AsType[*APIError](err)
+	if !ok {
+		t.Fatalf("err = %T (%v), want *APIError for the 302 itself", err, err)
+	}
+	if apiErr.Status != http.StatusFound {
+		t.Errorf("status = %d, want 302", apiErr.Status)
+	}
+	if log.count() != 1 {
+		t.Errorf("requests = %d, want 1 (redirect not followed)", log.count())
+	}
+}
+
+func TestProvidedClientGetsSafeRedirectPolicy(t *testing.T) {
+	srv, log := startServer(t, func(n int, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			http.Redirect(w, &http.Request{URL: &url.URL{Scheme: "http", Host: "x"}}, "/second", http.StatusTemporaryRedirect)
+			return
+		}
+		writeOK(w, "followed")
+	})
+	// A caller-provided client with a nil CheckRedirect must still not
+	// follow redirects.
+	c := newTestClient(t, srv.URL, func(o *Options) { o.HTTPClient = &http.Client{} })
+	_, _, err := c.Complete(t.Context(), "s", "u")
+	apiErr, ok := errors.AsType[*APIError](err)
+	if !ok || apiErr.Status != http.StatusTemporaryRedirect {
+		t.Fatalf("err = %v, want the 307 as APIError", err)
+	}
+	if log.count() != 1 {
+		t.Errorf("requests = %d, want 1", log.count())
+	}
+}
+
+func TestOversizedBodyCapped(t *testing.T) {
+	old := maxBodyRead
+	maxBodyRead = 128
+	t.Cleanup(func() { maxBodyRead = old })
+	srv, _ := startServer(t, func(_ int, w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"` + strings.Repeat("x", 400) + `"}]}`))
+	})
+	c := newTestClient(t, srv.URL, nil)
+	_, _, err := c.Complete(t.Context(), "s", "u")
+	if err == nil {
+		t.Fatal("want a parse error for the truncated body")
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("err = %v, want a truncation mention", err)
+	}
+}
+
+func TestBodyAtCapNotTruncated(t *testing.T) {
+	old := maxBodyRead
+	maxBodyRead = 4096
+	t.Cleanup(func() { maxBodyRead = old })
+	srv, _ := startServer(t, func(_ int, w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, strings.Repeat("y", 4000))
+	})
+	c := newTestClient(t, srv.URL, nil)
+	text, _, err := c.Complete(t.Context(), "s", "u")
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(text) != 4000 {
+		t.Errorf("text len = %d, want 4000 (body exactly at cap must parse)", len(text))
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	positives := []string{"localhost", "LOCALHOST", "127.0.0.1", "127.255.1.2", "::1", "[::1]"}
+	for _, h := range positives {
+		if !IsLoopbackHost(h) {
+			t.Errorf("IsLoopbackHost(%q) = false, want true", h)
+		}
+	}
+	negatives := []string{
+		"127.0.0.1.attacker.tld",
+		"localhost.evil.com",
+		"notlocalhost",
+		"::2",
+		"fe80::1%en0",
+		"[fe80::1%25en0]",
+		"10.0.0.1",
+		"example.com",
+		"",
+		"2130706433",
+	}
+	for _, h := range negatives {
+		if IsLoopbackHost(h) {
+			t.Errorf("IsLoopbackHost(%q) = true, want false", h)
+		}
 	}
 }

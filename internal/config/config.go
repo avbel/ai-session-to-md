@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/avbel/ai-session-to-md/internal/llm"
 )
 
 // ErrUsage marks a configuration problem; the CLI maps it to exit code 2.
@@ -99,7 +100,8 @@ func Path(flagPath string, env Env, goos string) string {
 
 // Load merges and validates the configuration.
 func Load(opts LoadOptions) (*Config, error) {
-	file, err := readFile(Path(opts.Values["config"], opts.Env, runtime.GOOS))
+	path := Path(opts.Values["config"], opts.Env, runtime.GOOS)
+	file, err := readFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +141,7 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 
 	expandPaths(&c)
-	if err := c.validate(opts.RequireModel); err != nil {
+	if err := c.validate(opts.RequireModel, path); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -267,7 +269,7 @@ func expandHome(p string) string {
 	return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), string(filepath.Separator)))
 }
 
-func (c *Config) validate(requireModel bool) error {
+func (c *Config) validate(requireModel bool, cfgPath string) error {
 	for _, p := range c.RedactPatterns {
 		if _, err := regexp.Compile(p); err != nil {
 			return fmt.Errorf("%w: redact pattern %q: %v", ErrUsage, p, err)
@@ -289,7 +291,7 @@ func (c *Config) validate(requireModel bool) error {
 		return err
 	}
 	if requireModel && strings.TrimSpace(c.Model) == "" {
-		return fmt.Errorf("%w: missing model: pass --model, set AISMD_MODEL or set model = ... in the config file", ErrUsage)
+		return fmt.Errorf("%w: missing model: pass --model or --raw, set AISMD_MODEL, or set model = ... in the config file (%s)", ErrUsage, cfgPath)
 	}
 	return nil
 }
@@ -306,26 +308,13 @@ func validateBaseURL(raw string) error {
 	switch u.Scheme {
 	case "https":
 	case "http":
-		if !isLoopback(u.Hostname()) {
+		if !llm.IsLoopbackHost(u.Hostname()) {
 			return fmt.Errorf("%w: base URL %q is http:// but the host is not loopback; the API key would be sent in cleartext", ErrUsage, raw)
 		}
 	default:
 		return fmt.Errorf("%w: base URL scheme must be https (or http on loopback), got %q", ErrUsage, u.Scheme)
 	}
 	return nil
-}
-
-func isLoopback(host string) bool {
-	if host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") || strings.HasPrefix(host, "127.") || host == "::1" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
 }
 
 var validLevels = map[string]bool{
