@@ -1,0 +1,51 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gosec
+    - revive
+    - modernize
+  settings:
+    gosec:
+      excludes:
+        # Intended patterns, documented in PLAN.md §16 step 1:
+        # G204: exec with variable args — gitinfo and the opencode fallback exec
+        #       take the session cwd / configured dir from controlled sources.
+        - G204
+        # G304: file path from variable — readers open session files/dbs by path.
+        - G304
+        # G306: output file permissions — 0644 is required for the handoff file.
+        - G306
+    revive:
+      rules:
+        # All packages are internal.
+        - name: exported
+          disabled: true
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+      # Git repos may contain commands in their own config; only these packages
+      # legitimately run git / opencode with computed arguments.
+      - path: internal/(gitinfo|harness/opencode)
+        linters:
+          - gosec
+        text: "G204:"
+      - path: internal/(harness|jsonl|handoff)
+        linters:
+          - gosec
+        text: "G304:"
+      - path: internal/handoff
+        linters:
+          - gosec
+        text: "G306:"
+
+formatters:
+  enable:
+    - gofmt
