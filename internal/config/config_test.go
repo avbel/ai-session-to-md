@@ -224,7 +224,7 @@ func TestDirsFromFileAndFlags(t *testing.T) {
 
 func TestExpandTilde(t *testing.T) {
 	setHomeEnv(t, "/home/u")
-	if got := expandHome("~"); got != "/home/u" {
+	if got := expandHome("~"); got != filepath.Clean("/home/u") {
 		t.Errorf("expandHome(~) = %q", got)
 	}
 	if got := expandHome("~/sub"); got != filepath.Join("/home/u", "sub") {
