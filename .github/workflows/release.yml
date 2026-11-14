@@ -100,7 +100,7 @@ jobs:
               -o "dist/${name}/ai-session-to-md${ext}" \
               ./cmd/ai-session-to-md
             if [[ "${goos}" == "windows" ]]; then
-              (cd "dist/${name}" && zip -9 -q "../../ai-session-to-md-${name}.zip" *)
+              (cd "dist/${name}" && zip -9 -q "../ai-session-to-md-${name}.zip" *)
             else
               tar -cf - -C "dist/${name}" . | xz -9e > "dist/ai-session-to-md-${name}.tar.xz"
             fi
