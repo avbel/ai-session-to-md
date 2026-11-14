@@ -12,7 +12,7 @@ import (
 type msgData struct {
 	Text    string          `json:"text"`
 	Files   json.RawMessage `json:"files"`
-	Model   string          `json:"model"`
+	Model   json.RawMessage `json:"model"`
 	Content []contentItem   `json:"content"`
 	Finish  *string         `json:"finish"`
 	Summary string          `json:"summary"`
@@ -103,7 +103,7 @@ func (b *builder) addUser(m msg) {
 }
 
 func (b *builder) addAssistant(m msg) {
-	b.model = cmp.Or(m.Data.Model, b.model)
+	b.model = cmp.Or(modelJSON(string(m.Data.Model)), b.model)
 	// The finish of the last assistant message is the one that counts; later
 	// messages simply overwrite.
 	b.info.HasFinish = true

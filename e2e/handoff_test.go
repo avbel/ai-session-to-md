@@ -59,8 +59,12 @@ func TestCodexLatest(t *testing.T) {
 
 	res := e.runOK("codex", "--latest")
 
-	mustContain(t, res.Stderr, "drop codex thread "+codexSubID, "subagent drop log")
-	mustContain(t, res.Stderr, "drop codex thread "+codexChildID, "child drop log")
+	// Drop diagnostics are --verbose-only (the default run stays quiet); the
+	// re-run is --raw so it makes no extra LLM request.
+	mustNotContain(t, res.Stderr, "drop codex thread", "quiet default run")
+	resVerbose := e.runOK("codex", "--latest", "--verbose", "--raw", "--force")
+	mustContain(t, resVerbose.Stderr, "drop codex thread "+codexSubID, "subagent drop log")
+	mustContain(t, resVerbose.Stderr, "drop codex thread "+codexChildID, "child drop log")
 
 	meta, doc := readHandoff(t, handoffPath(e, "CODEX.md"))
 	mustEqual(t, meta.Harness, "codex", "meta harness")
