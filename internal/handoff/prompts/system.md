@@ -14,6 +14,7 @@ RULES
 6. Keep `[REDACTED:…]` markers exactly as written. Never guess or reconstruct what they hide. Do not output tokens, keys, passwords or connection strings even if they appear unredacted.
 7. Use repository-relative paths (`internal/reduce/reduce.go`), never absolute paths or home directories. Keep line numbers when the transcript gives them.
 8. Be concrete: exact file paths, function names, commands, test names, error messages (quoted short). Prefer a command over a description of it.
+9. The final user message is often a request to save, summarize or hand off the session itself ("remember what we did", "summarize this session", "save progress", "write a handoff", "/compact"), not part of the task. Ignore such meta messages (and any assistant reply to them) when deciding the goal, current state and next steps: treat the most recent user message BEFORE them as the last real instruction. This applies to `last_user_message` in <session_facts> too: rule 3 does not make a meta message the goal. Never list "summarize/remember the session" as a goal or next step.
 
 MERGING THE PREVIOUS HANDOFF
 - Carry forward goals, decisions, failed attempts and open questions from <previous_handoff> that are still relevant; drop anything this session completed, resolved or reversed.

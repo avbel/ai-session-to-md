@@ -43,10 +43,14 @@ type Status struct {
 // Derive reports where the session stopped, working through the rules of the
 // plan in order: interrupted, pending tool call, mid-turn / finish states,
 // unanswered user message, open question, completed.
+// LastUser and LastAssistant skip a trailing "remember what we did" style
+// request, which only asks for this handoff; the stop status still reads
+// every turn.
 func Derive(s Session, info Info) Status {
+	task := withoutTrailingMeta(s.Turns)
 	st := Status{
-		LastUser:      lastTurnText(s.Turns, UserText),
-		LastAssistant: lastTurnText(s.Turns, AssistantText),
+		LastUser:      lastTurnText(task, UserText),
+		LastAssistant: lastTurnText(task, AssistantText),
 		MidTurn:       info.MidTurn,
 		Finish:        info.Finish,
 	}
