@@ -52,9 +52,10 @@ type Flags struct {
 	PromptFile       string
 	SystemPromptFile string
 
-	ClaudeDir   string
-	CodexDir    string
-	OpenCodeDir string
+	ClaudeDir      string
+	CodexDir       string
+	OpenCodeDir    string
+	AntigravityDir string
 
 	ConfigPath string
 
@@ -76,6 +77,8 @@ var aliases = map[string]session.Harness{
 	"cx":          session.HarnessCodex,
 	"opencode":    session.HarnessOpenCode,
 	"oc":          session.HarnessOpenCode,
+	"antigravity": session.HarnessAntigravity,
+	"agy":         session.HarnessAntigravity,
 }
 
 // Parse loops fs.Parse over the argument list so that flags are accepted
@@ -179,6 +182,8 @@ func (f *Flags) Value(name string) (string, bool) {
 		return f.CodexDir, true
 	case "opencode-dir":
 		return f.OpenCodeDir, true
+	case "antigravity-dir":
+		return f.AntigravityDir, true
 	case "config":
 		return f.ConfigPath, true
 	default:
@@ -201,7 +206,7 @@ var configFlagNames = []string{
 	"base-url", "model", "api-key-env", "thinking", "thinking-style",
 	"extra-body", "max-input-tokens", "max-output-tokens", "timeout",
 	"prompt-append", "prompt-file", "system-prompt-file",
-	"claude-dir", "codex-dir", "opencode-dir", "config",
+	"claude-dir", "codex-dir", "opencode-dir", "antigravity-dir", "config",
 }
 
 func newFlagSet(f *Flags) *flag.FlagSet {
@@ -234,6 +239,7 @@ func newFlagSet(f *Flags) *flag.FlagSet {
 	fs.StringVar(&f.ClaudeDir, "claude-dir", "", "Claude Code storage dir")
 	fs.StringVar(&f.CodexDir, "codex-dir", "", "Codex storage dir")
 	fs.StringVar(&f.OpenCodeDir, "opencode-dir", "", "OpenCode storage dir")
+	fs.StringVar(&f.AntigravityDir, "antigravity-dir", "", "Antigravity storage dir")
 	fs.StringVar(&f.ConfigPath, "config", "", "config file path")
 	boolFlag(&f.Quiet, "quiet", "print only errors and the final path")
 	boolFlag(&f.Verbose, "verbose", "log debug details to stderr")

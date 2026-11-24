@@ -1,11 +1,13 @@
 # ai-session-to-md
 
-Turn one AI coding-agent session — Claude Code, Codex or OpenCode — into a
+Turn one AI coding-agent session — Claude Code, Codex, OpenCode or
+Antigravity — into a
 Markdown handoff file that the next agent can read and resume from, on another
 harness or another machine. It reads the harness's local session store,
 extracts where the work stopped, redacts secrets, shrinks the transcript to a
 token budget and asks any OpenAI-compatible model to write the handoff as
-`CLAUDE_CODE.md`, `CODEX.md` or `OPEN_CODE.md`. No accounts, no cloud sync, no
+`CLAUDE_CODE.md`, `CODEX.md`, `OPEN_CODE.md` or `ANTIGRAVITY.md`. No accounts,
+no cloud sync, no
 full-screen TUI: one binary, one file.
 
 [![CI](https://github.com/avbel/ai-session-to-md/actions/workflows/ci.yml/badge.svg)](https://github.com/avbel/ai-session-to-md/actions/workflows/ci.yml)
@@ -15,7 +17,7 @@ full-screen TUI: one binary, one file.
 ## How it works
 
 ```
-~/.claude · ~/.codex · ~/.local/share/opencode
+~/.claude · ~/.codex · ~/.local/share/opencode · ~/.gemini
         │  read one session (pick it, or pass an id/--latest)
         ▼
 extract facts: status, last messages, todos, git state, files touched
@@ -30,7 +32,7 @@ reduce the transcript to the token budget (map-reduce older turns)
 OpenAI-compatible LLM (OpenAI, OpenRouter, Ollama, LM Studio, …)
         │
         ▼
-CLAUDE_CODE.md · CODEX.md · OPEN_CODE.md
+CLAUDE_CODE.md · CODEX.md · OPEN_CODE.md · ANTIGRAVITY.md
 ```
 
 Handoffs chain across machines and harnesses. Start a task in Claude Code on
@@ -153,10 +155,11 @@ it refuses instead of guessing and asks for `--force`.
 ```text
 ai-session-to-md [HARNESS] [SESSION_ID] [flags]
 
-Turn an AI coding-agent session (Claude Code, Codex or OpenCode) into a
-Markdown handoff file for the next agent, on any machine.
+Turn an AI coding-agent session (Claude Code, Codex, OpenCode or
+Antigravity) into a Markdown handoff file for the next agent, on any machine.
 
-HARNESS      claude-code | codex | opencode (aliases: claude, cc / cx / oc).
+HARNESS      claude-code | codex | opencode | antigravity
+             (aliases: claude, cc / cx / oc / agy).
              Omitted: all harnesses.
 SESSION_ID   full id or unique prefix (>= 6 chars). Omitted: picker.
 
@@ -192,6 +195,7 @@ Storage:
   --claude-dir DIR      Claude Code storage dir (default ~/.claude)
   --codex-dir DIR       Codex storage dir (default ~/.codex)
   --opencode-dir DIR    OpenCode storage dir (default ~/.local/share/opencode)
+  --antigravity-dir DIR Antigravity storage dir (default ~/.gemini)
 
 Misc:
   --config PATH         config file (default $XDG_CONFIG_HOME or
@@ -273,12 +277,13 @@ redact_patterns = ['(?i)internal-token-[a-z0-9]{20}']
 # Deep-merged into the request body last, so it can override anything.
 extra_body = { temperature = 0.2 }
 
-# Harness storage dirs. Same effect as --claude-dir, --codex-dir and
-# --opencode-dir. A missing dir is skipped silently.
+# Harness storage dirs. Same effect as --claude-dir, --codex-dir,
+# --opencode-dir and --antigravity-dir. A missing dir is skipped silently.
 [dirs]
 claude = "~/.claude"
 codex = "~/.codex"
 opencode = "~/.local/share/opencode"
+antigravity = "~/.gemini"
 ```
 
 Environment variables:
@@ -489,9 +494,10 @@ new harness to read it:
 | Claude Code | `Read CODEX.md and continue.` |
 | Codex | `Read CLAUDE_CODE.md and continue.` |
 | OpenCode | `Read CODEX.md and continue.` |
+| Antigravity | `Read OPEN_CODE.md and continue.` |
 
 The file name is the one produced by the previous hop:
-`CLAUDE_CODE.md`, `CODEX.md` or `OPEN_CODE.md`. If it is not at the repo root,
+`CLAUDE_CODE.md`, `CODEX.md`, `OPEN_CODE.md` or `ANTIGRAVITY.md`. If it is not at the repo root,
 name its path in the prompt.
 
 ## Where sessions are read from
@@ -501,6 +507,7 @@ name its path in the prompt.
 | Claude Code | `$CLAUDE_CONFIG_DIR`, else `~/.claude` | `--claude-dir`, `[dirs].claude` |
 | Codex | `$CODEX_HOME`, else `~/.codex` | `--codex-dir`, `[dirs].codex` |
 | OpenCode | `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode` (on Windows also `%LOCALAPPDATA%\opencode`) | `--opencode-dir`, `[dirs].opencode` |
+| Antigravity | `~/.gemini` (the agy CLI's `antigravity-cli/` and the Antigravity app's `antigravity/`) | `--antigravity-dir`, `[dirs].antigravity` |
 
 A harness whose directory does not exist is skipped silently; one that exists
 but cannot be read produces a warning and the remaining harnesses continue.
@@ -520,6 +527,16 @@ Supported formats:
   tables. If those tables are absent, a session id (no picker) goes through
   `opencode session export <id>` instead; listing is not available in that
   mode.
+- **Antigravity** (agy CLI 1.5 and the Antigravity app) — the readable step
+  log `brain/<id>/.system_generated/logs/transcript_full.jsonl`, or the
+  truncated `transcript.jsonl` where that is the only one (the app writes
+  only that). Workspaces, titles and run state come from
+  `antigravity-cli/conversation_summaries.db`, which indexes both; without
+  it, `history.jsonl` and the commands' working directories stand in. The
+  checklist in `brain/<id>/task.md` becomes the todo list. Subagent
+  conversations are filtered out. The `conversations/*.db` protobuf rows and
+  the app's encrypted `.pb` files are not read, so a conversation without a
+  step log is not listed.
 
 ## Security & privacy
 

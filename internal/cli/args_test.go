@@ -61,6 +61,18 @@ func TestParseInterspersed(t *testing.T) {
 			},
 		},
 		{
+			name: "antigravity alias and dir flag",
+			args: []string{"agy", "--antigravity-dir", "/g"},
+			check: func(t *testing.T, f *Flags) {
+				if f.Harness != "antigravity" || f.AntigravityDir != "/g" {
+					t.Errorf("got %+v", f)
+				}
+				if v := f.Values()["antigravity-dir"]; v != "/g" {
+					t.Errorf("Values()[antigravity-dir] = %q", v)
+				}
+			},
+		},
+		{
 			name: "long output with dir",
 			args: []string{"--output", "out/hand.md", "codex"},
 			check: func(t *testing.T, f *Flags) {

@@ -27,9 +27,10 @@ type fileConfig struct {
 }
 
 type dirsFile struct {
-	Claude   string `toml:"claude"`
-	Codex    string `toml:"codex"`
-	OpenCode string `toml:"opencode"`
+	Claude      string `toml:"claude"`
+	Codex       string `toml:"codex"`
+	OpenCode    string `toml:"opencode"`
+	Antigravity string `toml:"antigravity"`
 }
 
 // parseTOML decodes the config file with BurntSushi/toml. extra_body is

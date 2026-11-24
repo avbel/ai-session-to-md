@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/avbel/ai-session-to-md/internal/harness"
+	"github.com/avbel/ai-session-to-md/internal/harness/antigravity"
 	"github.com/avbel/ai-session-to-md/internal/harness/claudecode"
 	"github.com/avbel/ai-session-to-md/internal/harness/codex"
 	"github.com/avbel/ai-session-to-md/internal/harness/opencode"
@@ -16,10 +17,10 @@ import (
 
 // Dirs holds the per-harness storage directories, already expanded.
 type Dirs struct {
-	Claude, Codex, OpenCode string
+	Claude, Codex, OpenCode, Antigravity string
 }
 
-// DefaultAdapters builds the three adapters for dirs. verbose receives
+// DefaultAdapters builds the four adapters for dirs. verbose receives
 // per-item diagnostics (e.g. dropped Codex threads); warn receives genuine
 // warnings the user should see (e.g. an OpenCode snapshot fallback). A
 // harness whose directory does not exist is skipped silently, per the CLI
@@ -41,6 +42,9 @@ func DefaultAdapters(dirs Dirs, warn func(string), verbose func(format string, a
 	}
 	if isDir(dirs.OpenCode) {
 		out = append(out, opencode.New(dirs.OpenCode, opencode.WithWarn(warn)))
+	}
+	if isDir(dirs.Antigravity) {
+		out = append(out, antigravity.New(dirs.Antigravity, antigravity.WithLogger(verbose), antigravity.WithWarn(warn)))
 	}
 	return out
 }

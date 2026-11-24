@@ -20,7 +20,7 @@ const (
 )
 
 // candidateFiles are the handoff files this tool writes, one per harness.
-var candidateFiles = []string{"CLAUDE_CODE.md", "CODEX.md", "OPEN_CODE.md"}
+var candidateFiles = []string{"CLAUDE_CODE.md", "CODEX.md", "OPEN_CODE.md", "ANTIGRAVITY.md"}
 
 // OutputFileName maps a harness to its handoff file in the output dir.
 func OutputFileName(h session.Harness) (string, bool) {
@@ -31,6 +31,8 @@ func OutputFileName(h session.Harness) (string, bool) {
 		return candidateFiles[1], true
 	case session.HarnessOpenCode:
 		return candidateFiles[2], true
+	case session.HarnessAntigravity:
+		return candidateFiles[3], true
 	}
 	return "", false
 }

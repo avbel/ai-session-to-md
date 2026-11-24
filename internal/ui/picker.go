@@ -13,7 +13,7 @@ import (
 
 // Column widths of the picker label; the title gets whatever is left.
 // Deviation from the plan's §15 widths, per review: the harness column shows
-// short names (claude/codex/opencode, 8 cells), the project column shows the
+// short names (claude/codex/opencode/agy, 8 cells), the project column shows the
 // path relative to the scope root (12 cells, hidden when every row shares it)
 // and the branch column is 12 cells.
 const (
@@ -181,6 +181,8 @@ func displayHarness(h session.Harness) string {
 	switch h {
 	case session.HarnessClaudeCode:
 		return "claude"
+	case session.HarnessAntigravity:
+		return "agy"
 	default:
 		return string(h)
 	}

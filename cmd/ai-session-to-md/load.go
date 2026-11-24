@@ -16,6 +16,7 @@ import (
 	"github.com/avbel/ai-session-to-md/internal/handoff"
 	"github.com/avbel/ai-session-to-md/internal/harness"
 	"github.com/avbel/ai-session-to-md/internal/harness/adapters"
+	"github.com/avbel/ai-session-to-md/internal/harness/antigravity"
 	"github.com/avbel/ai-session-to-md/internal/harness/codex"
 	"github.com/avbel/ai-session-to-md/internal/harness/opencode"
 	"github.com/avbel/ai-session-to-md/internal/session"
@@ -27,9 +28,10 @@ import (
 // skipped silently (DefaultAdapters).
 func buildAdapters(dirs config.Dirs, chosen session.Harness, warn func(string), verbose func(format string, args ...any)) []harness.Adapter {
 	all := adapters.DefaultAdapters(adapters.Dirs{
-		Claude:   dirs.Claude,
-		Codex:    dirs.Codex,
-		OpenCode: dirs.OpenCode,
+		Claude:      dirs.Claude,
+		Codex:       dirs.Codex,
+		OpenCode:    dirs.OpenCode,
+		Antigravity: dirs.Antigravity,
 	}, warn, verbose)
 	if chosen == "" {
 		return all
@@ -60,6 +62,7 @@ func resolveDirs(cfg *config.Config, getenv config.Env) config.Dirs {
 		Codex:  cmp.Or(cfg.Dirs.Codex, getenv("CODEX_HOME"), filepath.Join(home, ".codex")),
 	}
 	d.OpenCode = cmp.Or(cfg.Dirs.OpenCode, defaultOpenCodeDir(getenv, home))
+	d.Antigravity = cmp.Or(cfg.Dirs.Antigravity, filepath.Join(home, ".gemini"))
 	return d
 }
 
@@ -131,8 +134,8 @@ func gitOne(ctx context.Context, dir string, args ...string) (string, bool) {
 }
 
 // loadSession loads the selected session with the harness-specific end
-// signals: OpenCode via LoadDetailed, Codex via its StatusInfo hook, Claude
-// Code with zero Info.
+// signals: OpenCode and Antigravity via LoadDetailed, Codex via its
+// StatusInfo hook, Claude Code with zero Info.
 func loadSession(ctx context.Context, ads []harness.Adapter, meta session.Meta) (session.Session, session.Info, error) {
 	for _, ad := range ads {
 		if ad.Name() != meta.Harness {
@@ -145,6 +148,12 @@ func loadSession(ctx context.Context, ads []harness.Adapter, meta session.Meta) 
 				return session.Session{}, session.Info{}, fmt.Errorf("load opencode session: %w", err)
 			}
 			return res.Session, res.Info, nil
+		case *antigravity.Adapter:
+			s, info, err := a.LoadDetailed(ctx, meta)
+			if err != nil {
+				return session.Session{}, session.Info{}, fmt.Errorf("load antigravity session: %w", err)
+			}
+			return s, info, nil
 		case *codex.Adapter:
 			s, err := a.Load(ctx, meta)
 			if err != nil {

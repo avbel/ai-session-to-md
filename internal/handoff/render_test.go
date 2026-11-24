@@ -229,6 +229,9 @@ func TestOutputNamesAndDisplay(t *testing.T) {
 	if HarnessDisplay(session.HarnessOpenCode) != "OpenCode" {
 		t.Errorf("got %q", HarnessDisplay(session.HarnessOpenCode))
 	}
+	if HarnessDisplay(session.HarnessAntigravity) != "Antigravity" {
+		t.Errorf("got %q", HarnessDisplay(session.HarnessAntigravity))
+	}
 	if HarnessDisplay(session.Harness("weird")) != "weird" {
 		t.Error("unknown harness falls back to its raw name")
 	}

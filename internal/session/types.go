@@ -5,9 +5,10 @@ import "time"
 type Harness string
 
 const (
-	HarnessClaudeCode Harness = "claude-code"
-	HarnessCodex      Harness = "codex"
-	HarnessOpenCode   Harness = "opencode"
+	HarnessClaudeCode  Harness = "claude-code"
+	HarnessCodex       Harness = "codex"
+	HarnessOpenCode    Harness = "opencode"
+	HarnessAntigravity Harness = "antigravity"
 )
 
 type Meta struct {

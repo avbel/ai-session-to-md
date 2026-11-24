@@ -328,9 +328,10 @@ func TestNewHistoryDropsCurrentSession(t *testing.T) {
 
 func TestOutputFileName(t *testing.T) {
 	for h, want := range map[session.Harness]string{
-		session.HarnessClaudeCode: "CLAUDE_CODE.md",
-		session.HarnessCodex:      "CODEX.md",
-		session.HarnessOpenCode:   "OPEN_CODE.md",
+		session.HarnessClaudeCode:  "CLAUDE_CODE.md",
+		session.HarnessCodex:       "CODEX.md",
+		session.HarnessOpenCode:    "OPEN_CODE.md",
+		session.HarnessAntigravity: "ANTIGRAVITY.md",
 	} {
 		got, ok := OutputFileName(h)
 		if !ok || got != want {

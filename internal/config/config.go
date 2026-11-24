@@ -29,9 +29,10 @@ type Env func(string) string
 // Dirs are the per-harness storage dirs after flag/file override; empty
 // means "fall back to the platform default".
 type Dirs struct {
-	Claude   string
-	Codex    string
-	OpenCode string
+	Claude      string
+	Codex       string
+	OpenCode    string
+	Antigravity string
 }
 
 // Config is the merged, validated configuration.
@@ -243,9 +244,10 @@ func pickDirs(opts LoadOptions, fileDirs dirsFile) (Dirs, error) {
 		return cmp.Or(pickString(flagName, opts, ""), fileVal)
 	}
 	return Dirs{
-		Claude:   dir("claude-dir", fileDirs.Claude),
-		Codex:    dir("codex-dir", fileDirs.Codex),
-		OpenCode: dir("opencode-dir", fileDirs.OpenCode),
+		Claude:      dir("claude-dir", fileDirs.Claude),
+		Codex:       dir("codex-dir", fileDirs.Codex),
+		OpenCode:    dir("opencode-dir", fileDirs.OpenCode),
+		Antigravity: dir("antigravity-dir", fileDirs.Antigravity),
 	}, nil
 }
 
@@ -255,6 +257,7 @@ func expandPaths(c *Config) {
 	c.Dirs.Claude = expandHome(c.Dirs.Claude)
 	c.Dirs.Codex = expandHome(c.Dirs.Codex)
 	c.Dirs.OpenCode = expandHome(c.Dirs.OpenCode)
+	c.Dirs.Antigravity = expandHome(c.Dirs.Antigravity)
 }
 
 // expandHome rewrites a leading ~ to the user's home dir.

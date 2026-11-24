@@ -114,6 +114,43 @@ func TestOpenCodeLatest(t *testing.T) {
 	mustNotContain(t, user, "OTHER PROJECT", "request body")
 }
 
+// Scenario 2c: antigravity --latest picks the top-level conversation in
+// scope, not the newer subagent or the other project's conversation, and a
+// following hop chains the OpenCode handoff into ANTIGRAVITY.md.
+func TestAntigravityLatest(t *testing.T) {
+	e := newTestEnv(t)
+	writeOpenCodeStore(t, e)
+	writeAntigravityStore(t, e)
+	llm := e.useLLM(llmValid)
+
+	e.runOK("opencode", "--latest")
+	waitNextSecond()
+	e.runOK("agy", "--latest")
+
+	meta, doc := readHandoff(t, handoffPath(e, "ANTIGRAVITY.md"))
+	mustEqual(t, meta.Harness, "antigravity", "meta harness")
+	mustEqual(t, meta.SessionID, agyMainID, "meta session id")
+	mustEqual(t, meta.Title, "Antigravity E2E session", "meta title")
+	mustEqual(t, statusLine(doc), "- **Status:** stopped during tool call `run_command`", "status")
+	mustContain(t, doc, "go test ./pkg/agy", "pending tool call")
+	mustContain(t, doc, "  Port the parser to agy", "last user message")
+	mustNotContain(t, doc, "ADDITIONAL_METADATA", "agy metadata block")
+	mustContain(t, doc, "  - [x] port the parser", "completed todo")
+	mustContain(t, doc, "  - [ ] **in progress:** run the agy tests", "in-progress todo")
+	mustContain(t, doc, "`"+filepath.Join("pkg", "agy", "agy.go")+"`", "files touched")
+	mustContain(t, doc, "from **Antigravity** session", "generated line")
+	if len(meta.History) != 1 || meta.History[0].Harness != "opencode" {
+		t.Fatalf("meta history = %+v, want the opencode hop", meta.History)
+	}
+
+	reqs := llm.requireCount(t, 2)
+	user := messageContent(t, reqs[1].Body, "user")
+	mustContain(t, user, `"session_id":"`+agyMainID+`"`, "request facts session id")
+	mustNotContain(t, user, agyChildID, "request facts")
+	mustNotContain(t, user, "CHILD ONLY", "request body")
+	mustNotContain(t, user, "OTHER PROJECT", "request body")
+}
+
 // Scenario 3: three harnesses in one directory chain their handoffs; the third
 // file's history has three ordered rows and the third request carries the
 // previous Summary.

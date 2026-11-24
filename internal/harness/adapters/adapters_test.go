@@ -13,20 +13,22 @@ func TestDefaultAdaptersSkipsMissingDirs(t *testing.T) {
 	base := t.TempDir()
 	claude := filepath.Join(base, "claude")
 	opencode := filepath.Join(base, "opencode")
-	for _, d := range []string{claude, opencode} {
+	gemini := filepath.Join(base, "gemini")
+	for _, d := range []string{claude, opencode, gemini} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	got := DefaultAdapters(Dirs{
-		Claude:   claude,
-		Codex:    filepath.Join(base, "missing"),
-		OpenCode: opencode,
+		Claude:      claude,
+		Codex:       filepath.Join(base, "missing"),
+		OpenCode:    opencode,
+		Antigravity: gemini,
 	}, nil, nil)
 
-	if len(got) != 2 {
-		t.Fatalf("want 2 adapters, got %d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("want 3 adapters, got %d", len(got))
 	}
 	if got[0].Name() != session.HarnessClaudeCode {
 		t.Errorf("first adapter = %q, want claude-code", got[0].Name())
@@ -34,14 +36,18 @@ func TestDefaultAdaptersSkipsMissingDirs(t *testing.T) {
 	if got[1].Name() != session.HarnessOpenCode {
 		t.Errorf("second adapter = %q, want opencode", got[1].Name())
 	}
+	if got[2].Name() != session.HarnessAntigravity {
+		t.Errorf("third adapter = %q, want antigravity", got[2].Name())
+	}
 }
 
 func TestDefaultAdaptersAllMissing(t *testing.T) {
 	base := t.TempDir()
 	got := DefaultAdapters(Dirs{
-		Claude:   filepath.Join(base, "no-claude"),
-		Codex:    filepath.Join(base, "no-codex"),
-		OpenCode: filepath.Join(base, "no-opencode"),
+		Claude:      filepath.Join(base, "no-claude"),
+		Codex:       filepath.Join(base, "no-codex"),
+		OpenCode:    filepath.Join(base, "no-opencode"),
+		Antigravity: filepath.Join(base, "no-gemini"),
 	}, func(string) {}, nil)
 
 	if len(got) != 0 {

@@ -206,7 +206,7 @@ func TestPathPerOS(t *testing.T) {
 func TestDirsFromFileAndFlags(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.toml")
-	body := "[dirs]\nclaude = \"~/claude-store\"\ncodex = \"/codex\"\n"
+	body := "[dirs]\nclaude = \"~/claude-store\"\ncodex = \"/codex\"\nantigravity = \"~/gemini-store\"\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +216,9 @@ func TestDirsFromFileAndFlags(t *testing.T) {
 	}
 	if !filepath.IsAbs(c.Dirs.Claude) || strings.Contains(c.Dirs.Claude, "~") {
 		t.Errorf("dirs.claude not expanded: %q", c.Dirs.Claude)
+	}
+	if !filepath.IsAbs(c.Dirs.Antigravity) || !strings.HasSuffix(c.Dirs.Antigravity, "gemini-store") {
+		t.Errorf("dirs.antigravity not expanded: %q", c.Dirs.Antigravity)
 	}
 	if c.Dirs.Codex != "/codex" || c.Dirs.OpenCode != "/oc" {
 		t.Errorf("dirs: %+v", c.Dirs)

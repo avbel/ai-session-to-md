@@ -66,6 +66,8 @@ func HarnessDisplay(h session.Harness) string {
 		return "Codex"
 	case session.HarnessOpenCode:
 		return "OpenCode"
+	case session.HarnessAntigravity:
+		return "Antigravity"
 	}
 	return string(h)
 }

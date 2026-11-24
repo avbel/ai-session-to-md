@@ -9,24 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-)
 
-func TestSQLiteURI(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"/tmp/proj/opencode.db", "file:///tmp/proj/opencode.db"},
-		{`C:\Users\avbel\AppData\opencode.db`, "file:///C:/Users/avbel/AppData/opencode.db"},
-		{`C:/Users/x/opencode.db`, "file:///C:/Users/x/opencode.db"},
-		{"relative/opencode.db", "file:relative/opencode.db"},
-		{"/tmp/store#x/opencode.db", "file:///tmp/store%23x/opencode.db"},
-		{"/tmp/store?x/opencode.db", "file:///tmp/store%3Fx/opencode.db"},
-		{"/tmp/sp ace/opencode.db", "file:///tmp/sp%20ace/opencode.db"},
-	}
-	for _, tc := range cases {
-		if got := sqliteURI(tc.in); got != tc.want {
-			t.Errorf("sqliteURI(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
+	"github.com/avbel/ai-session-to-md/internal/sqlitero"
+)
 
 // TestOpenStoreSpecialCharsPath reproduces the finding: a directory whose
 // name contains # or ? must still open read-only; unescaped, the # silently
@@ -74,7 +59,7 @@ func TestOpenStoreSpecialCharsPath(t *testing.T) {
 	}
 	// mode=ro must survive the escaping: a write through the read-only URI
 	// must be refused.
-	ro, err := sql.Open("sqlite", sqliteURI(filepath.Join(dir, "opencode.db"))+"?mode=ro&_pragma=busy_timeout(5000)")
+	ro, err := sql.Open("sqlite", sqlitero.URI(filepath.Join(dir, "opencode.db"))+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

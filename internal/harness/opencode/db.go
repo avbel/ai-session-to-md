@@ -4,11 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
-	"path/filepath"
-	"regexp"
-	"strings"
 
+	"github.com/avbel/ai-session-to-md/internal/sqlitero"
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
 )
 
@@ -29,7 +26,7 @@ func (s *store) Close() {
 // works when the file cannot be opened for the WAL read but may miss
 // transactions written after the last checkpoint.
 func openRO(path string, immutable bool) (*sql.DB, error) {
-	uri := sqliteURI(path) + "?mode=ro&_pragma=busy_timeout(5000)"
+	uri := sqlitero.URI(path) + "?mode=ro&_pragma=busy_timeout(5000)"
 	if immutable {
 		uri += "&immutable=1"
 	}
@@ -68,40 +65,4 @@ func tableNames(ctx context.Context, db *sql.DB) (map[string]bool, error) {
 		found[name] = true
 	}
 	return found, rows.Err()
-}
-
-// winDrive matches Windows drive-letter paths like C:/…, which are not
-// filepath.IsAbs on non-Windows hosts.
-var winDrive = regexp.MustCompile(`^[A-Za-z]:/`)
-
-// sqliteURI builds the file: URI consumed by the SQLite driver. Absolute
-// paths always become file:///… (a Windows drive as file:///C:/…) with
-// forward slashes, on every OS; relative paths become file:relative/… . The
-// form follows the path shape, not runtime.GOOS, so it behaves identically
-// everywhere and is testable on any platform.
-func sqliteURI(path string) string {
-	// ToSlash alone is not enough: on unix a backslash is an ordinary
-	// filename byte, so Windows drive paths must be converted explicitly.
-	slash := strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
-	// "/"-prefixed paths are absolute on unix but not on Windows, so the
-	// shape check decides, not filepath.IsAbs alone.
-	abs := filepath.IsAbs(path) || winDrive.MatchString(slash) || strings.HasPrefix(slash, "/")
-	if !abs {
-		return "file:" + escapeSegments(slash)
-	}
-	if !strings.HasPrefix(slash, "/") {
-		slash = "/" + slash
-	}
-	return "file://" + escapeSegments(slash)
-}
-
-// escapeSegments percent-escapes every path segment; the SQLite driver
-// decodes the URI path itself, so # or ? in a directory name cannot truncate
-// the URI or turn the mode=ro query parameter into part of the filename.
-func escapeSegments(p string) string {
-	seg := strings.Split(p, "/")
-	for i, s := range seg {
-		seg[i] = url.PathEscape(s)
-	}
-	return strings.Join(seg, "/")
 }

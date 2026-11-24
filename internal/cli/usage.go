@@ -8,10 +8,11 @@ import (
 
 const usageText = `ai-session-to-md [HARNESS] [SESSION_ID] [flags]
 
-Turn an AI coding-agent session (Claude Code, Codex or OpenCode) into a
-Markdown handoff file for the next agent, on any machine.
+Turn an AI coding-agent session (Claude Code, Codex, OpenCode or
+Antigravity) into a Markdown handoff file for the next agent, on any machine.
 
-HARNESS      claude-code | codex | opencode (aliases: claude, cc / cx / oc).
+HARNESS      claude-code | codex | opencode | antigravity
+             (aliases: claude, cc / cx / oc / agy).
              Omitted: all harnesses.
 SESSION_ID   full id or unique prefix (>= 6 chars). Omitted: picker.
 
@@ -47,6 +48,7 @@ Storage:
   --claude-dir DIR      Claude Code storage dir (default ~/.claude)
   --codex-dir DIR       Codex storage dir (default ~/.codex)
   --opencode-dir DIR    OpenCode storage dir (default ~/.local/share/opencode)
+  --antigravity-dir DIR Antigravity storage dir (default ~/.gemini)
 
 Misc:
   --config PATH         config file (default $XDG_CONFIG_HOME or

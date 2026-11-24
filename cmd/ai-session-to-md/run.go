@@ -210,11 +210,13 @@ func noSessionsError(all bool, root string, dirs config.Dirs) error {
 // not exist, so an --all run that finds nothing knows where it looked.
 func missingStorageHint(dirs config.Dirs) string {
 	var missing []string
-	for _, d := range []struct{ flag, path string }{
+	stores := []struct{ flag, path string }{
 		{"--claude-dir", dirs.Claude},
 		{"--codex-dir", dirs.Codex},
 		{"--opencode-dir", dirs.OpenCode},
-	} {
+		{"--antigravity-dir", dirs.Antigravity},
+	}
+	for _, d := range stores {
 		if info, err := os.Stat(d.path); err != nil || !info.IsDir() {
 			missing = append(missing, d.path+" ("+d.flag+")")
 		}
@@ -222,7 +224,7 @@ func missingStorageHint(dirs config.Dirs) string {
 	switch {
 	case len(missing) == 0:
 		return ""
-	case len(missing) == 3:
+	case len(missing) == len(stores):
 		return "none of the session stores exist: " + strings.Join(missing, ", ")
 	default:
 		return "missing session stores: " + strings.Join(missing, ", ")
