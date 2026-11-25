@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360" viewBox="0 0 600 360" fill="none">
+  <defs>
+    <linearGradient id="conversation" x1="97" y1="85" x2="282" y2="253" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <linearGradient id="handoff" x1="279" y1="180" x2="475" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+  </defs>
+  <!-- Overlapping conversations become one portable handoff document. -->
+  <path d="M117 84h120a24 24 0 0 1 24 24v70a24 24 0 0 1-24 24h-64l-38 30v-30h-18a24 24 0 0 1-24-24v-70a24 24 0 0 1 24-24Z" stroke="#A78BFA" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M153 119h120a24 24 0 0 1 24 24v70a24 24 0 0 1-24 24h-36v30l-38-30h-46a24 24 0 0 1-24-24v-70a24 24 0 0 1 24-24Z" fill="url(#conversation)"/>
+  <g fill="#fff">
+    <circle cx="174" cy="177" r="7"/>
+    <circle cx="207" cy="177" r="7"/>
+    <circle cx="240" cy="177" r="7"/>
+  </g>
+  <path d="M380 77h65l52 52v130a24 24 0 0 1-24 24h-93a24 24 0 0 1-24-24V101a24 24 0 0 1 24-24Z" fill="#0F172A" stroke="#2DD4BF" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M445 80v49h49" stroke="#2DD4BF" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M278 180h120m-24-25 25 25-25 25" stroke="url(#handoff)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M386 230h79m-79 25h49" stroke="#94A3B8" stroke-width="9" stroke-linecap="round"/>
+</svg>

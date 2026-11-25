@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Conversation bubbles flowing into a handoff document" width="600">
+</p>
+
 # ai-session-to-md
 
 Turn one AI coding-agent session — Claude Code, Codex, OpenCode or
